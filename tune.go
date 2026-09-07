@@ -25,16 +25,16 @@ net.ipv4.tcp_max_syn_backlog = 4096
 `
 
 func menuTune() {
-	sectionHeader("تیون سرور")
+	sectionHeader("Tune Server")
 	if runtime.GOOS != "linux" {
-		fmt.Println(dim("این بخش فقط روی لینوکس معنی داره — این تنظیمات سطح کرنل لینوکسن."))
+		fmt.Println(dim("this section only applies on Linux — these are Linux kernel settings."))
 		pressEnter()
 		return
 	}
 
-	fmt.Println("این کار تنظیمات زیر رو روی سیستم اعمال می‌کنه:")
+	fmt.Println("This will apply the following settings to the system:")
 	fmt.Println(dim(sysctlContent))
-	if !confirm("اعمال بشه؟", true) {
+	if !confirm("apply it?", true) {
 		return
 	}
 
@@ -45,13 +45,13 @@ func menuTune() {
 
 	path := "/etc/sysctl.d/99-rmtunnel.conf"
 	if err := os.WriteFile(path, []byte(sysctlContent), 0o644); err != nil {
-		fmt.Println(red("نتونستم فایل رو بنویسم: " + err.Error()))
+		fmt.Println(red("failed to write file: " + err.Error()))
 		pressEnter()
 		return
 	}
 	out, err := run("sysctl", "--system")
 	if err != nil {
-		fmt.Println(red("sysctl --system شکست خورد:"))
+		fmt.Println(red("sysctl --system failed:"))
 		fmt.Println(dim(out))
 		pressEnter()
 		return
@@ -60,9 +60,9 @@ func menuTune() {
 	cc, _ := run("sysctl", "-n", "net.ipv4.tcp_congestion_control")
 	cc = strings.TrimSpace(cc)
 	if cc == "bbr" {
-		fmt.Println(green("اعمال شد. congestion control فعلی: bbr"))
+		fmt.Println(green("applied. current congestion control: bbr"))
 	} else {
-		fmt.Println(yellow("اعمال شد، ولی congestion control فعلی «" + cc + "»ه، نه bbr — این کرنل ممکنه ماژول bbr رو نداشته باشه."))
+		fmt.Println(yellow("applied, but current congestion control is \"" + cc + "\", not bbr — this kernel may be missing the bbr module."))
 	}
 	pressEnter()
 }

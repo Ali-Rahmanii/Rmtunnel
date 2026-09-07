@@ -70,9 +70,9 @@ handshake: **[docs/CENSORSHIP.md](docs/CENSORSHIP.md)**.
 
 ## Running it
 
-The easy way — an interactive menu (colored, in Persian) that walks you
-through setting up either side, tuning the OS, benchmarking, checking
-service status, updating, or uninstalling:
+The easy way — an interactive, colored menu that walks you through setting
+up either side, tuning the OS, benchmarking, checking service status,
+updating, or uninstalling:
 
 ```bash
 sudo rmtunnel
@@ -94,20 +94,20 @@ Commented example configs, if you'd rather write one by hand:
 ```
 ╔══════════════════════════════════════════════════╗
 ║                     RM Tunnel                     ║
-║                    نسخه 0.1.0                     ║
+║                       v0.1.0                      ║
 ║      https://github.com/Ali-Rahmanii/rmtunnel     ║
-║              توسعه‌دهنده: Ali Rahmani              ║
+║                  by Ali Rahmani                   ║
 ╚══════════════════════════════════════════════════╝
 
-منوی اصلی
-  1)  ساخت تانل ایران (سرور)
-  2)  ساخت تانل خارج (کلاینت)
-  3)  تیون سرور (بهینه‌سازی سیستم‌عامل)
-  4)  بنچمارک سرعت و سخت‌افزار
-  5)  وضعیت سرویس‌ها
-  6)  آپدیت اسکریپت
-  7)  حذف نصب
-  0)  خروج
+Main Menu
+  1)  Build Iran tunnel (server)
+  2)  Build Kharej tunnel (client)
+  3)  Tune server (OS optimization)
+  4)  Speed & hardware benchmark
+  5)  Service status
+  6)  Update script
+  7)  Uninstall
+  0)  Exit
 ```
 
 Options 1/2 are wizards that ask for a token, mode, which disguises to

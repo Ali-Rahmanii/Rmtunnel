@@ -37,10 +37,10 @@ func installService(unit, role, configPath string) {
 		if err == nil && self != binPath {
 			if data, err := os.ReadFile(self); err == nil {
 				if err := os.WriteFile(binPath, data, 0o755); err != nil {
-					fmt.Println(red("نتونستم باینری رو در " + binPath + " کپی کنم: " + err.Error()))
-					fmt.Println(dim("خودت دستی کپی کن: cp " + self + " " + binPath))
+					fmt.Println(red("failed to copy the binary to " + binPath + ": " + err.Error()))
+					fmt.Println(dim("copy it manually: cp " + self + " " + binPath))
 				} else {
-					fmt.Println(green("باینری در " + binPath + " کپی شد."))
+					fmt.Println(green("binary copied to " + binPath))
 				}
 			}
 		}
@@ -54,15 +54,15 @@ func installService(unit, role, configPath string) {
 	unitPath := "/etc/systemd/system/" + unit + ".service"
 
 	if err := os.WriteFile(unitPath, []byte(unitText), 0o644); err != nil {
-		fmt.Println(red("نتونستم فایل سرویس رو بنویسم: " + err.Error()))
+		fmt.Println(red("failed to write the service file: " + err.Error()))
 		return
 	}
-	fmt.Println(green("فایل سرویس نوشته شد: " + unitPath))
+	fmt.Println(green("service file written: " + unitPath))
 
 	run("systemctl", "daemon-reload")
 	run("systemctl", "enable", "--now", unit)
-	fmt.Println(green("سرویس " + unit + " فعال و اجرا شد."))
-	fmt.Println(dim("برای دیدن لاگ‌ها:  journalctl -u " + unit + " -f"))
+	fmt.Println(green("service " + unit + " enabled and started."))
+	fmt.Println(dim("to view logs:  journalctl -u " + unit + " -f"))
 }
 
 func run(name string, args ...string) (string, error) {
@@ -88,22 +88,22 @@ func trimNL(s string) string {
 }
 
 func menuStatus() {
-	sectionHeader("وضعیت سرویس‌ها")
+	sectionHeader("Service Status")
 	if runtime.GOOS != "linux" {
-		fmt.Println(dim("این بخش فقط روی لینوکس (جایی که سرویس واقعاً نصب می‌شه) معنی داره."))
+		fmt.Println(dim("this section only applies on Linux, where the service is actually installed."))
 		pressEnter()
 		return
 	}
 	for _, unit := range []string{"rmtunnel-server", "rmtunnel-client"} {
 		active, detail := serviceStatus(unit)
-		label := red("● غیرفعال")
+		label := red("● inactive")
 		if active {
-			label = green("● فعال")
+			label = green("● active")
 		}
 		fmt.Printf("  %-22s %s  %s\n", unit, label, dim(detail))
 	}
 	fmt.Println()
-	unit := readLineDefault("برای دیدن لاگ یه سرویس اسمش رو بزن (خالی=رد شو)", "")
+	unit := readLineDefault("enter a service name to view its logs (blank=skip)", "")
 	if unit != "" {
 		out, _ := run("journalctl", "-u", unit, "-n", "40", "--no-pager")
 		fmt.Println(out)
@@ -112,13 +112,13 @@ func menuStatus() {
 }
 
 func menuUninstall() {
-	sectionHeader("حذف نصب")
+	sectionHeader("Uninstall")
 	if runtime.GOOS != "linux" {
-		fmt.Println(dim("این بخش فقط روی لینوکس معنی داره."))
+		fmt.Println(dim("this section only applies on Linux."))
 		pressEnter()
 		return
 	}
-	if !confirm(red("مطمئنی؟ این سرویس‌ها، باینری و کانفیگ‌ها رو حذف می‌کنه")+" (کانفیگ‌ها اختیاریه)", false) {
+	if !confirm(red("are you sure? this removes the services, the binary, and (optionally) the configs"), false) {
 		return
 	}
 	for _, unit := range []string{"rmtunnel-server", "rmtunnel-client"} {
@@ -127,10 +127,10 @@ func menuUninstall() {
 	}
 	run("systemctl", "daemon-reload")
 	os.Remove("/usr/local/bin/rmtunnel")
-	fmt.Println(green("سرویس‌ها و باینری حذف شدن."))
-	if confirm("کانفیگ‌ها (/etc/rmtunnel) هم حذف بشن؟", false) {
+	fmt.Println(green("services and binary removed."))
+	if confirm("remove the configs (/etc/rmtunnel) too?", false) {
 		os.RemoveAll("/etc/rmtunnel")
-		fmt.Println(green("کانفیگ‌ها هم حذف شدن."))
+		fmt.Println(green("configs removed too."))
 	}
 	pressEnter()
 }

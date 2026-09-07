@@ -22,7 +22,7 @@ func readLine(prompt string) string {
 	if err != nil && line == "" {
 		if err == io.EOF {
 			fmt.Println()
-			fmt.Println(dim("ورودی تموم شد — خروج."))
+			fmt.Println(dim("input closed — exiting."))
 			os.Exit(0)
 		}
 	}
@@ -51,20 +51,20 @@ func confirm(prompt string, def bool) bool {
 	if v == "" {
 		return def
 	}
-	return v == "y" || v == "yes" || v == "بله" || v == "آره"
+	return v == "y" || v == "yes"
 }
 
 func pressEnter() {
-	readLine(dim("برای ادامه Enter رو بزن..."))
+	readLine(dim("press Enter to continue..."))
 }
 
 func banner() string {
 	line := purple("╔" + strings.Repeat("═", 52) + "╗")
 	bottom := purple("╚" + strings.Repeat("═", 52) + "╝")
 	title := blue(bold(centerPad("RM Tunnel", 52)))
-	ver := cyan(centerPad("نسخه "+Version, 52))
+	ver := cyan(centerPad("v"+Version, 52))
 	repo := dim(centerPad(RepoURL, 52))
-	author := dim(centerPad("توسعه‌دهنده: "+Author, 52))
+	author := dim(centerPad("by "+Author, 52))
 	side := purple("║")
 	return strings.Join([]string{
 		line,
@@ -91,19 +91,19 @@ func runMenu() {
 		clearScreen()
 		fmt.Println(banner())
 		fmt.Println()
-		fmt.Println(bold(blue("منوی اصلی")))
+		fmt.Println(bold(blue("Main Menu")))
 		fmt.Println(purple(strings.Repeat("─", 40)))
-		fmt.Println(menuItem("1", "ساخت تانل ایران (سرور)"))
-		fmt.Println(menuItem("2", "ساخت تانل خارج (کلاینت)"))
-		fmt.Println(menuItem("3", "تیون سرور (بهینه‌سازی سیستم‌عامل)"))
-		fmt.Println(menuItem("4", "بنچمارک سرعت و سخت‌افزار"))
-		fmt.Println(menuItem("5", "وضعیت سرویس‌ها"))
-		fmt.Println(menuItem("6", "آپدیت اسکریپت"))
-		fmt.Println(menuItem("7", "حذف نصب"))
-		fmt.Println(menuItem("0", "خروج"))
+		fmt.Println(menuItem("1", "Build Iran tunnel (server)"))
+		fmt.Println(menuItem("2", "Build Kharej tunnel (client)"))
+		fmt.Println(menuItem("3", "Tune server (OS optimization)"))
+		fmt.Println(menuItem("4", "Speed & hardware benchmark"))
+		fmt.Println(menuItem("5", "Service status"))
+		fmt.Println(menuItem("6", "Update script"))
+		fmt.Println(menuItem("7", "Uninstall"))
+		fmt.Println(menuItem("0", "Exit"))
 		fmt.Println(purple(strings.Repeat("─", 40)))
 
-		choice := readLine(bold("انتخابت: "))
+		choice := readLine(bold("choice: "))
 		switch choice {
 		case "1":
 			wizardServer()
@@ -120,10 +120,10 @@ func runMenu() {
 		case "7":
 			menuUninstall()
 		case "0":
-			fmt.Println(dim("خداحافظ."))
+			fmt.Println(dim("bye."))
 			return
 		default:
-			fmt.Println(red("گزینه‌ی نامعتبر."))
+			fmt.Println(red("invalid choice."))
 			pressEnter()
 		}
 	}

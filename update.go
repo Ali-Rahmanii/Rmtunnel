@@ -82,27 +82,27 @@ func downloadAndReplaceSelf(url string) error {
 }
 
 func menuUpdate() {
-	sectionHeader("آپدیت اسکریپت")
-	fmt.Println("نسخه‌ی فعلی: " + bold(Version))
-	fmt.Println(dim("در حال بررسی " + RepoURL + " ..."))
+	sectionHeader("Update Script")
+	fmt.Println("current version: " + bold(Version))
+	fmt.Println(dim("checking " + RepoURL + " ..."))
 
 	rel, err := fetchLatestRelease()
 	if err != nil {
-		fmt.Println(red("خطا در گرفتن اطلاعات نسخه: " + err.Error()))
+		fmt.Println(red("failed to fetch release info: " + err.Error()))
 		pressEnter()
 		return
 	}
-	fmt.Println("آخرین نسخه‌ی منتشرشده: " + bold(rel.TagName))
+	fmt.Println("latest published version: " + bold(rel.TagName))
 
 	if rel.TagName == "v"+Version || rel.TagName == Version {
-		fmt.Println(green("از قبل روی آخرین نسخه‌ای."))
+		fmt.Println(green("already on the latest version."))
 		pressEnter()
 		return
 	}
 
 	if runtime.GOOS != "linux" {
-		fmt.Println(dim("آپدیت خودکار فقط برای باینری‌های منتشرشده‌ی لینوکسیه."))
-		fmt.Println(dim("روی این سیستم از سورس بیلد بگیر: git pull && go build -o rmtunnel ."))
+		fmt.Println(dim("automatic updates only work for the published Linux binaries."))
+		fmt.Println(dim("on this system, build from source instead: git pull && go build -o rmtunnel ."))
 		pressEnter()
 		return
 	}
@@ -115,43 +115,43 @@ func menuUpdate() {
 		}
 	}
 	if assetURL == "" {
-		fmt.Println(red("فایل مناسب معماری این سیستم (" + assetName + ") توی release پیدا نشد."))
+		fmt.Println(red("no asset for this system's architecture (" + assetName + ") found in the release."))
 		pressEnter()
 		return
 	}
 
-	if !confirm("دانلود و جایگزینی نسخه‌ی جاری با "+rel.TagName+"؟", true) {
+	if !confirm("download and replace the current version with "+rel.TagName+"?", true) {
 		return
 	}
 	if err := downloadAndReplaceSelf(assetURL); err != nil {
-		fmt.Println(red("آپدیت ناموفق بود: " + err.Error()))
+		fmt.Println(red("update failed: " + err.Error()))
 		pressEnter()
 		return
 	}
-	fmt.Println(green("آپدیت شد به " + rel.TagName + ". اجرای بعدی برنامه از نسخه‌ی جدید استفاده می‌کنه."))
+	fmt.Println(green("updated to " + rel.TagName + ". the next run will use the new version."))
 	pressEnter()
 }
 
 func menuBenchInteractive() {
-	sectionHeader("بنچمارک سرعت و سخت‌افزار")
-	fmt.Println(dim("این تست باید روی هر دو سرور (ایران و خارج) اجرا بشه: یکی server یکی client."))
+	sectionHeader("Speed & Hardware Benchmark")
+	fmt.Println(dim("run this on both boxes (Iran and Kharej): one as server, one as client."))
 	fmt.Println()
-	fmt.Println(menuItem("1", "این سیستم منتظر بمونه (سمت server بنچ)"))
-	fmt.Println(menuItem("2", "این سیستم به یه سرور بنچ وصل بشه و تست بگیره (سمت client بنچ)"))
-	fmt.Println(menuItem("0", "برگشت"))
+	fmt.Println(menuItem("1", "this box waits (bench server side)"))
+	fmt.Println(menuItem("2", "this box connects to a bench server and tests (bench client side)"))
+	fmt.Println(menuItem("0", "back"))
 
-	switch readLine("انتخاب: ") {
+	switch readLine("choice: ") {
 	case "1":
-		addr := readLineDefault("آدرس گوش دادن", "0.0.0.0:9999")
-		token := readLineDefault("توکن موقت (فقط برای این تست)", genToken())
-		fmt.Println(dim("منتظر اتصال... (Ctrl+C برای توقف)"))
+		addr := readLineDefault("listen address", "0.0.0.0:9999")
+		token := readLineDefault("temporary token (for this test only)", genToken())
+		fmt.Println(dim("waiting for a connection... (Ctrl+C to stop)"))
 		if err := runBenchServer(addr, token); err != nil {
 			fmt.Println(red(err.Error()))
 			pressEnter()
 		}
 	case "2":
-		addr := readLine("آدرس سرور بنچ (ip:port): ")
-		token := readLine("توکن: ")
+		addr := readLine("bench server address (ip:port): ")
+		token := readLine("token: ")
 		if err := runBenchClient(addr, token); err != nil {
 			fmt.Println(red(err.Error()))
 		}

@@ -29,22 +29,22 @@ type disguiseAnswer struct {
 }
 
 func wizardServer() {
-	sectionHeader("ساخت تانل ایران (سرور)")
+	sectionHeader("Build Iran Tunnel (Server)")
 
-	fmt.Println(dim("این ویزارد کانفیگ سرور رو می‌سازه. پورت‌هایی که اینجا باز می‌کنی"))
-	fmt.Println(dim("همون پورت‌هاییه که کاربر نهایی بهشون وصل می‌شه."))
+	fmt.Println(dim("This wizard builds the server config. The ports you open here"))
+	fmt.Println(dim("are what end users actually connect to."))
 	fmt.Println()
 
-	token := readLineDefault("توکن امنیتی (خالی = خودکار بساز)", "")
+	token := readLineDefault("Security token (blank = generate one)", "")
 	if token == "" {
 		token = genToken()
-		fmt.Println(green("توکن ساخته شد: ") + bold(token))
+		fmt.Println(green("Token generated: ") + bold(token))
 	}
-	fmt.Println(yellow("⚠ این توکن رو دقیقاً همینطور توی کانفیگ کلاینت (سرور خارج) هم بذار."))
+	fmt.Println(yellow("⚠ put this exact token in the client (Kharej) config too."))
 	fmt.Println()
 
 	mode := "tcpmux"
-	if !confirm("مود تونل روی tcpmux (مالتی‌پلکس، پیشنهادی) باشه؟", true) {
+	if !confirm("Use tcpmux mode (multiplexed, recommended)?", true) {
 		mode = "tcp"
 	}
 	fmt.Println()
@@ -53,21 +53,21 @@ func wizardServer() {
 	fmt.Println()
 
 	var ports []PortMap
-	fmt.Println(bold("پورت‌هایی که می‌خوای فوروارد بشن رو وارد کن."))
-	fmt.Println(dim("فرمت: پورت_عمومی=آدرس_مقصد_روی_سرور_خارج  (مثلا 8080=127.0.0.1:8080)"))
-	fmt.Println(dim("یک خط خالی برای پایان دادن."))
+	fmt.Println(bold("Enter the ports you want forwarded."))
+	fmt.Println(dim("Format: public_port=target_on_kharej_box  (e.g. 8080=127.0.0.1:8080)"))
+	fmt.Println(dim("Blank line to finish."))
 	for {
-		line := readLine(fmt.Sprintf("پورت %d (خالی=پایان): ", len(ports)+1))
+		line := readLine(fmt.Sprintf("port %d (blank=done): ", len(ports)+1))
 		if line == "" {
 			if len(ports) == 0 {
-				fmt.Println(red("حداقل یک پورت لازمه."))
+				fmt.Println(red("at least one port is required."))
 				continue
 			}
 			break
 		}
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-			fmt.Println(red("فرمت اشتباهه. مثال: 8080=127.0.0.1:8080"))
+			fmt.Println(red("bad format. example: 8080=127.0.0.1:8080"))
 			continue
 		}
 		ports = append(ports, PortMap{
@@ -84,20 +84,21 @@ func wizardServer() {
 }
 
 func wizardClient() {
-	sectionHeader("ساخت تانل خارج (کلاینت)")
+	sectionHeader("Build Kharej Tunnel (Client)")
 
-	fmt.Println(dim("این باکس همونیه که بک‌اند واقعی (X-UI، پنل، وایرگارد و...) روشه یا بهش دسترسی داره."))
+	fmt.Println(dim("This is the box the real backend (X-UI, a panel, WireGuard, ...) runs on"))
+	fmt.Println(dim("or can reach."))
 	fmt.Println()
 
-	token := readLineDefault("توکن امنیتی (باید دقیقاً با سرور یکی باشه)", "")
+	token := readLineDefault("Security token (must match the server exactly)", "")
 	for token == "" {
-		fmt.Println(red("توکن نمی‌تونه خالی باشه."))
-		token = readLineDefault("توکن امنیتی", "")
+		fmt.Println(red("token can't be empty."))
+		token = readLineDefault("Security token", "")
 	}
 	fmt.Println()
 
 	mode := "tcpmux"
-	if !confirm("مود tcpmux (باید دقیقاً با سرور یکی باشه) باشه؟", true) {
+	if !confirm("Use tcpmux mode (must match the server)?", true) {
 		mode = "tcp"
 	}
 	fmt.Println()
@@ -115,74 +116,74 @@ func wizardClient() {
 // enabled and, for wss, its extra fields. isServer decides whether it asks
 // for listen_addr or server_addr.
 func askDisguises(isServer bool) []disguiseAnswer {
-	fmt.Println(bold("کدوم روش‌های رد شدن از فیلترینگ فعال باشن؟"))
-	fmt.Println(dim("پیشنهاد: هر سه‌تا رو فعال کن — کلاینت خودش بین اینا سوییچ می‌کنه."))
-	fmt.Println(dim("توضیح کامل هرکدوم: docs/CENSORSHIP.md"))
+	fmt.Println(bold("Which anti-filtering methods should be enabled?"))
+	fmt.Println(dim("Recommended: enable all three — the client switches between them on its own."))
+	fmt.Println(dim("Full explanation of each: docs/CENSORSHIP.md"))
 	fmt.Println()
 
 	var out []disguiseAnswer
 
-	if confirm("  wss (TLS+WebSocket، شبیه یه سایت HTTPS معمولی — قوی‌ترین)", true) {
+	if confirm("  wss (TLS+WebSocket, looks like an ordinary HTTPS site — strongest)", true) {
 		d := disguiseAnswer{Type: "wss", Path: "/ws"}
 		if isServer {
-			port := readLineDefault("    پورت گوش دادن wss", "443")
+			port := readLineDefault("    wss listen port", "443")
 			d.Addr = "0.0.0.0:" + port
-			d.Domain = readLineDefault("    دامنه (اگه گواهی واقعی داری وارد کن، وگرنه خالی بذار)", "")
-			d.CertFile = readLineDefault("    مسیر فایل cert (خالی = خودامضا)", "")
+			d.Domain = readLineDefault("    domain (enter it if you have a real cert, else leave blank)", "")
+			d.CertFile = readLineDefault("    cert file path (blank = self-signed)", "")
 			if d.CertFile != "" {
-				d.KeyFile = readLineDefault("    مسیر فایل key", "")
+				d.KeyFile = readLineDefault("    key file path", "")
 			}
 		} else {
-			ip := readLine("    آدرس عمومی سرور ایران: ")
-			port := readLineDefault("    پورت wss سرور", "443")
+			ip := readLine("    Iran server's public address: ")
+			port := readLineDefault("    server's wss port", "443")
 			d.Addr = ip + ":" + port
-			d.Domain = readLineDefault("    دامنه (دقیقاً همونی که سمت سرور زدی، یا خالی)", "")
-			d.Insecure = confirm("    سرور از گواهی خودامضا استفاده می‌کنه؟", true)
+			d.Domain = readLineDefault("    domain (exactly what you set on the server, or blank)", "")
+			d.Insecure = confirm("    does the server use a self-signed cert?", true)
 		}
 		out = append(out, d)
 	}
 
-	if confirm("  noise (رمزنگاری‌شده، بدون امضای پروتکل مشخص)", true) {
+	if confirm("  noise (encrypted, no fixed protocol signature)", true) {
 		d := disguiseAnswer{Type: "noise"}
 		if isServer {
-			port := readLineDefault("    پورت گوش دادن noise", "9001")
+			port := readLineDefault("    noise listen port", "9001")
 			d.Addr = "0.0.0.0:" + port
 		} else {
-			ip := readLine("    آدرس عمومی سرور ایران: ")
-			port := readLineDefault("    پورت noise سرور", "9001")
+			ip := readLine("    Iran server's public address: ")
+			port := readLineDefault("    server's noise port", "9001")
 			d.Addr = ip + ":" + port
 		}
 		out = append(out, d)
 	}
 
-	if confirm("  plain (خام، سریع‌ترین ولی راحت‌تر شناسایی میشه)", true) {
+	if confirm("  plain (raw, fastest but easiest to fingerprint)", true) {
 		d := disguiseAnswer{Type: "plain"}
 		if isServer {
-			port := readLineDefault("    پورت گوش دادن plain", "9000")
+			port := readLineDefault("    plain listen port", "9000")
 			d.Addr = "0.0.0.0:" + port
 		} else {
-			ip := readLine("    آدرس عمومی سرور ایران: ")
-			port := readLineDefault("    پورت plain سرور", "9000")
+			ip := readLine("    Iran server's public address: ")
+			port := readLineDefault("    server's plain port", "9000")
 			d.Addr = ip + ":" + port
 		}
 		out = append(out, d)
 	}
 
 	for len(out) == 0 {
-		fmt.Println(red("حداقل یکی رو باید فعال کنی."))
+		fmt.Println(red("you need to enable at least one."))
 		out = askDisguises(isServer)
 	}
 	return out
 }
 
 func askTierPreset() tierPreset {
-	fmt.Println(bold("سطح عملکرد (اگه نمی‌دونی چی انتخاب کنی، «مبتدی» ok برای سایز سرور خارج از حد وحشیانه نیست):"))
+	fmt.Println(bold("Performance tier (not sure? the default is a safe middle ground):"))
 	fmt.Println(menuItem("1", tiers[0].name))
-	fmt.Println(menuItem("2", tiers[1].name+" (پیش‌فرض)"))
+	fmt.Println(menuItem("2", tiers[1].name+" (default)"))
 	fmt.Println(menuItem("3", tiers[2].name))
 	fmt.Println(menuItem("4", tiers[3].name))
-	fmt.Println(dim("یا اگه دقیق می‌خوای بدونی، بعد از ساخت کانفیگ از «بنچمارک» توی منو استفاده کن."))
-	switch readLineDefault("انتخاب", "2") {
+	fmt.Println(dim("Or, for a precise answer, run \"Speed & hardware benchmark\" from the menu after this."))
+	switch readLineDefault("choice", "2") {
 	case "1":
 		return tiers[0]
 	case "3":
@@ -219,7 +220,7 @@ func renderDisguiseBlock(d disguiseAnswer, isServer bool) string {
 
 func renderServerTOML(token, mode string, disguises []disguiseAnswer, ports []PortMap, tier tierPreset) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# ساخته‌شده توسط ویزارد rmtunnel — %s\n\n", RepoURL)
+	fmt.Fprintf(&b, "# generated by the rmtunnel wizard — %s\n\n", RepoURL)
 	fmt.Fprintf(&b, "mode = %q\ntoken = %q\n\n", mode, token)
 	for _, d := range disguises {
 		b.WriteString(renderDisguiseBlock(d, true))
@@ -234,7 +235,7 @@ func renderServerTOML(token, mode string, disguises []disguiseAnswer, ports []Po
 
 func renderClientTOML(token, mode string, disguises []disguiseAnswer, tier tierPreset) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# ساخته‌شده توسط ویزارد rmtunnel — %s\n\n", RepoURL)
+	fmt.Fprintf(&b, "# generated by the rmtunnel wizard — %s\n\n", RepoURL)
 	fmt.Fprintf(&b, "mode = %q\ntoken = %q\n\n", mode, token)
 	for _, d := range disguises {
 		b.WriteString(renderDisguiseBlock(d, false))
@@ -272,31 +273,31 @@ mux_keepalive = "10s"
 // it as a systemd service. role is "server" or "client"; unit is the
 // matching systemd unit name.
 func finishWizard(role, tomlText, unit string) {
-	fmt.Println(bold(green("--- کانفیگ ساخته شد ---")))
+	fmt.Println(bold(green("--- config generated ---")))
 	fmt.Println(dim(tomlText))
 
 	defaultPath := defaultConfigPath(role)
-	path := readLineDefault("مسیر ذخیره", defaultPath)
+	path := readLineDefault("save path", defaultPath)
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		fmt.Println(red("خطا در ساخت پوشه: " + err.Error()))
+		fmt.Println(red("failed to create directory: " + err.Error()))
 		pressEnter()
 		return
 	}
 	if err := os.WriteFile(path, []byte(tomlText), 0o600); err != nil {
-		fmt.Println(red("خطا در ذخیره‌ی فایل: " + err.Error()))
+		fmt.Println(red("failed to write file: " + err.Error()))
 		pressEnter()
 		return
 	}
-	fmt.Println(green("ذخیره شد: " + path))
+	fmt.Println(green("saved: " + path))
 
 	if runtime.GOOS != "linux" {
-		fmt.Println(dim("نصب سرویس systemd فقط روی لینوکس در دسترسه — کانفیگ رو به سرور واقعی منتقل کن."))
+		fmt.Println(dim("systemd service install is only available on Linux — copy this config to the real server."))
 		pressEnter()
 		return
 	}
 
-	if confirm("همین الان به‌عنوان سرویس systemd نصب و اجرا بشه؟", true) {
+	if confirm("install and start this as a systemd service now?", true) {
 		installService(unit, role, path)
 	}
 	pressEnter()
