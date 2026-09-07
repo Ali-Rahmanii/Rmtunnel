@@ -1,0 +1,15 @@
+[Unit]
+Description=rmtunnel client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/rmtunnel client /etc/rmtunnel/client.toml
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=1048576
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

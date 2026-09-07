@@ -1,0 +1,52 @@
+# Runs on the Kharej box (or wherever the real services actually live). Dials
+# out to the server and keeps a pool of connections/sessions ready.
+
+mode  = "tcpmux"                              # must match the server's config
+token = "CHANGE-ME-to-a-long-random-string"   # must match the server's config
+
+# --- disguise profiles ---------------------------------------------------
+# ORDER MATTERS here: the client tries these top to bottom, skipping any
+# still cooling down from a recent failure (see docs/CENSORSHIP.md). Put the
+# one you most want to use first.
+
+[[disguise]]
+type = "wss"
+enabled = true
+server_addr = "SERVER_PUBLIC_IP:443"
+domain = "your-domain-or-blank.example"   # must match the server's cert/SNI
+path = "/ws"
+insecure_skip_verify = false   # set true only while testing with a self-signed cert
+
+[[disguise]]
+type = "noise"
+enabled = true
+server_addr = "SERVER_PUBLIC_IP:9001"
+
+[[disguise]]
+type = "plain"
+enabled = true
+server_addr = "SERVER_PUBLIC_IP:9000"
+
+retry_min = "1s"
+retry_max = "30s"
+heartbeat = "5s"
+
+# --- performance tuning: see docs/TUNING.md, or run `rmtunnel bench` -------
+nodelay      = true
+keepalive    = "15s"
+recv_buf     = 262144
+send_buf     = 262144
+dial_timeout = "8s"
+buffer_size  = 32768
+mss          = 0
+reuse_port   = false
+
+min_idle   = 4
+max_idle   = 16
+idle_grace = "20s"
+
+max_streams_per_session = 64
+mux_frame_size    = 32768
+mux_recv_buffer   = 4194304
+mux_stream_buffer = 1048576
+mux_keepalive     = "10s"

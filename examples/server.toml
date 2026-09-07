@@ -1,0 +1,72 @@
+# Runs on the Iran box. Publicly reachable ports go here; each one is
+# forwarded to whatever the client dials on its own side.
+
+mode  = "tcpmux"          # "tcp" or "tcpmux" — must match the client's config
+token = "CHANGE-ME-to-a-long-random-string"
+
+# --- disguise profiles ---------------------------------------------------
+# List every way you want this tunnel reachable. The server listens on ALL
+# enabled entries, all the time — there is nothing to "activate", the client
+# just picks whichever one currently works best. See docs/CENSORSHIP.md.
+#
+# Order does not matter on the server side (it listens on everything
+# regardless); it matters on the CLIENT side, where it sets preference.
+
+[[disguise]]
+type = "wss"                 # TLS + WebSocket — looks like an ordinary HTTPS site
+enabled = true
+listen_addr = "0.0.0.0:443"
+domain = "your-domain-or-blank.example"
+path = "/ws"                 # keep this secret-ish; anything else gets the decoy page
+# cert_file / key_file: point these at a real certificate (e.g. from
+# certbot/Let's Encrypt) for the strongest disguise. Leave blank to use an
+# auto-generated self-signed certificate — works, but is itself detectable
+# on close inspection.
+cert_file = ""
+key_file  = ""
+decoy_root = ""               # empty = small built-in "coming soon" page
+
+[[disguise]]
+type = "noise"                # encrypted, no protocol fingerprint, no TLS overhead
+enabled = true
+listen_addr = "0.0.0.0:9001"
+
+[[disguise]]
+type = "plain"                # raw TCP, cheapest, most fingerprintable — last resort
+enabled = true
+listen_addr = "0.0.0.0:9000"
+
+# --- forwarded ports -------------------------------------------------------
+# Every inbound connection on `listen` is forwarded to `target`, which the
+# CLIENT resolves and dials — so `target` can be 127.0.0.1:<port> on the
+# client box, or any address the client machine can reach.
+[[ports]]
+listen = "0.0.0.0:8080"
+target = "127.0.0.1:8080"
+
+[[ports]]
+listen = "0.0.0.0:2053"
+target = "127.0.0.1:2053"
+
+heartbeat = "5s"
+
+# --- performance tuning: see docs/TUNING.md, or run `rmtunnel bench` -------
+nodelay      = true
+keepalive    = "15s"
+recv_buf     = 262144
+send_buf     = 262144
+dial_timeout = "8s"
+buffer_size  = 32768
+mss          = 0        # Linux only; set if this tunnel runs inside another
+                          # tunnel/VPN with a reduced MTU — see docs/TUNING.md
+reuse_port   = false     # Linux only; SO_REUSEPORT for heavy concurrent-accept load
+
+min_idle   = 4
+max_idle   = 16
+idle_grace = "20s"
+
+max_streams_per_session = 64
+mux_frame_size    = 32768
+mux_recv_buffer   = 4194304
+mux_stream_buffer = 1048576
+mux_keepalive     = "10s"
