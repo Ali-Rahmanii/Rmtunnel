@@ -131,6 +131,20 @@ func (d *Duration) UnmarshalText(b []byte) error {
 	return nil
 }
 
+// MarshalText is what makes saveConfig's toml.Encoder (tunnels.go, used by
+// the "edit tunnel" menu) round-trip a Duration back to "5s" instead of a
+// bare struct. It must use a value receiver, not a pointer one: the encoder
+// checks whether the field's own type (Duration, not *Duration) implements
+// encoding.TextMarshaler — a pointer-receiver method wouldn't count, and
+// without this the encoder fell back to writing Duration's embedded
+// time.Duration field as its own subtable ("[heartbeat]\n  Duration = ...",
+// literally un-parseable — LoadConfig's own Undecoded() check then refused
+// to read the file back, which is what made every edited tunnel need a
+// delete-and-recreate to recover).
+func (d Duration) MarshalText() ([]byte, error) {
+	return []byte(d.Duration.String()), nil
+}
+
 // LoadConfig reads and validates a config file for role ("server" or
 // "client"). Role has to be set before validate() runs — it's what decides
 // which fields (listen_addr + ports for a server, server_addr for a client)

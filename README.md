@@ -133,10 +133,15 @@ several unrelated services, say, or one box running both a server tunnel
 for one purpose and a client tunnel for another.
 
 Option 4 applies the sysctl tuning from `docs/TUNING.md` (BBR, socket buffer
-ceilings). Option 6 checks this repo's GitHub Releases and replaces the
-running binary in place — and the menu also checks in the background the
-moment it starts, so an out-of-date install shows a warning banner on its
-own rather than only when you remember to check.
+ceilings). Option 6 checks this repo's GitHub Releases, replaces the running
+binary in place, migrates any tunnel still running under a pre-multi-tunnel
+install (so it shows up in "Manage tunnels" instead of running invisibly
+under a name nothing looks for anymore), and restarts every configured
+tunnel so it's actually running the new binary — swapping the file on disk
+doesn't touch a systemd service already running the old one in memory. The
+menu also checks in the background the moment it starts, so an out-of-date
+install shows a warning banner on its own rather than only when you remember
+to check.
 
 ## Sizing the config for your hardware and link
 
@@ -236,6 +241,33 @@ for a confusing reason. Fixed the tiers and added a `validate()` check.
 own raw TCP internally, and nothing hooked into that to tune it. Fixed via
 `NetDialContext` on the client dialer and a tuning listener wrapper on the
 server — see `wss.go` and `bench.go`'s `tunedTier`.
+
+**Editing a tunnel from the menu could break it permanently:** `saveConfig`
+re-encodes the config with `toml.NewEncoder`, and the `Duration` wrapper type
+only implemented `UnmarshalText` (needed for *reading* `"5s"` back), not
+`MarshalText`. The encoder's `encoding.TextMarshaler` check only looks at the
+value type, not a pointer-receiver method on it, so it never found one and
+fell back to encoding `Duration`'s embedded `time.Duration` field as its own
+subtable (`[heartbeat]\n  Duration = "5s"`, not valid at the top level) —
+which then failed to *load* on the next start, and again on the next attempt
+to edit it, since `editTunnel` reads the file before it can offer to fix
+anything. The only way out was deleting the tunnel and rebuilding it from
+scratch. Fixed by adding a value-receiver `MarshalText` to `Duration` in
+[config.go](config.go), verified with a standalone encode→decode→validate
+round-trip.
+
+**The benchmark under-reported real link speed**, most visibly on upload and
+on any link with non-trivial RTT: the timed window started immediately, so
+a meaningful slice of the 4-second test was TCP still climbing out of slow
+start rather than moving data at the link's real steady-state rate — and
+separately, the client computed upload Mbps from its own *nominal* request
+duration instead of the receiving server's actually-measured elapsed time,
+which skews low because the two sides' clocks start one network hop apart.
+Fixed by adding an unmeasured 2-second warmup before each timed phase, and by
+having the server (the side actually counting bytes for upload) report back
+its own measured elapsed time instead of the client assuming its own — see
+`bench.go`'s `measureDownload`/`measureUpload` and `serveBenchConn`'s
+`benchUp` case.
 
 ## What isn't here (on purpose — see docs/TUNING.md and docs/CENSORSHIP.md)
 

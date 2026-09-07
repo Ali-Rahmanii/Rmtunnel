@@ -129,8 +129,119 @@ func menuUpdate() {
 		pressEnter()
 		return
 	}
-	fmt.Println(green("updated to " + rel.TagName + ". the next run will use the new version."))
+	fmt.Println(green("updated to " + rel.TagName + "."))
+
+	// Replacing the binary on disk doesn't touch a systemd service that's
+	// already running the old one in memory — Linux keeps the old inode
+	// alive under the running process until something restarts it. Left
+	// alone, that's exactly what happened before this existed: the menu
+	// reported "updated", but the actual tunnel kept running the old build
+	// indefinitely, silently, until someone thought to restart it by hand.
+	migrated := migrateLegacyTunnels()
+	for _, name := range migrated {
+		fmt.Println(green("migrated legacy tunnel \"" + name + "\" to the multi-tunnel layout."))
+	}
+
+	tunnels := listTunnels()
+	if len(tunnels) > 0 {
+		fmt.Println(dim(fmt.Sprintf("restarting %d tunnel(s) so they run %s...", len(tunnels), rel.TagName)))
+		for _, t := range tunnels {
+			if _, err := run("systemctl", "restart", t.unit()); err != nil {
+				fmt.Println(red("  failed to restart " + t.unit() + " — restart it by hand from \"Manage tunnels\"."))
+			} else {
+				fmt.Println(green("  restarted " + t.unit()))
+			}
+		}
+	}
 	pressEnter()
+}
+
+// legacyTunnel describes a pre-v0.3.0 install: a single flat config
+// (/etc/rmtunnel/<role>.toml) and a non-templated unit (rmtunnel-<role>),
+// from before tunnels got names and lived under /etc/rmtunnel/tunnels/. A
+// box updated straight from that layout keeps that old service running
+// under a unit name the new "Manage tunnels" menu never looks at — it isn't
+// merely out of date, it's invisible, and a wizard-built tunnel on the same
+// port then collides with it instead of replacing it.
+type legacyTunnel struct {
+	role       string
+	unit       string
+	unitFile   string
+	configPath string
+}
+
+func legacyTunnels() []legacyTunnel {
+	var out []legacyTunnel
+	for _, role := range []string{"server", "client"} {
+		unit := "rmtunnel-" + role
+		out = append(out, legacyTunnel{
+			role:       role,
+			unit:       unit,
+			unitFile:   "/etc/systemd/system/" + unit + ".service",
+			configPath: "/etc/rmtunnel/" + role + ".toml",
+		})
+	}
+	return out
+}
+
+// migrateLegacyTunnels moves any pre-v0.3.0 flat-layout tunnel it finds into
+// the new named-tunnel layout, under the name "main" (or "legacy"/"legacyN"
+// if that's already taken), installs it as the new templated unit, and
+// retires the old one — so it shows up in "Manage tunnels" from now on
+// instead of running invisibly in the background under a name nothing looks
+// for anymore. Returns the names of whatever it migrated, role/name form.
+func migrateLegacyTunnels() []string {
+	var migrated []string
+	for _, lt := range legacyTunnels() {
+		if _, err := os.Stat(lt.unitFile); err != nil {
+			continue // no legacy install of this role — nothing to do
+		}
+		data, err := os.ReadFile(lt.configPath)
+		if err != nil {
+			// Unit file exists but its config is already gone — disable the
+			// orphaned unit and move on, there's nothing left to preserve.
+			run("systemctl", "disable", "--now", lt.unit)
+			os.Remove(lt.unitFile)
+			continue
+		}
+
+		name := "main"
+		if _, err := os.Stat(tunnelConfigPath(lt.role, name)); err == nil {
+			for i := 1; ; i++ {
+				cand := "legacy"
+				if i > 1 {
+					cand = fmt.Sprintf("legacy%d", i)
+				}
+				if _, err := os.Stat(tunnelConfigPath(lt.role, cand)); err != nil {
+					name = cand
+					break
+				}
+			}
+		}
+
+		if err := os.MkdirAll(tunnelDir(lt.role), 0o755); err != nil {
+			fmt.Println(red("failed to migrate " + lt.configPath + ": " + err.Error()))
+			continue
+		}
+		newPath := tunnelConfigPath(lt.role, name)
+		if err := os.WriteFile(newPath, data, 0o600); err != nil {
+			fmt.Println(red("failed to migrate " + lt.configPath + ": " + err.Error()))
+			continue
+		}
+
+		run("systemctl", "disable", "--now", lt.unit)
+		os.Remove(lt.unitFile)
+
+		if _, err := LoadConfig(newPath, lt.role); err != nil {
+			fmt.Println(yellow("⚠ migrated " + lt.configPath + " but it no longer validates (" + err.Error() + ") — fix it from \"Manage tunnels\" → Edit before starting it."))
+			migrated = append(migrated, lt.role+"/"+name)
+			continue
+		}
+		installTunnelService(lt.role, name, newPath)
+		os.Remove(lt.configPath)
+		migrated = append(migrated, lt.role+"/"+name)
+	}
+	return migrated
 }
 
 func isNewerVersion(tag string) bool {

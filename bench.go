@@ -28,7 +28,15 @@ const (
 	benchDown byte = 0x02
 	benchUp   byte = 0x03
 
-	benchTestDuration = 4 * time.Second
+	// benchWarmup runs unmeasured, right before each timed phase, purely to
+	// let TCP's congestion window climb out of slow start before the clock
+	// that decides the reported number starts. Skipping this was the reason
+	// a 4-second timed window (previous behavior — no warmup at all) read
+	// noticeably slower than a longer manual transfer on any link with real
+	// RTT: most of a short test's own duration was spent still ramping up,
+	// not moving data at the link's actual steady-state rate.
+	benchWarmup       = 2 * time.Second
+	benchTestDuration = 5 * time.Second
 	benchPings        = 10
 )
 
@@ -123,23 +131,49 @@ func serveBenchConn(conn net.Conn, token string) error {
 			conn.SetWriteDeadline(time.Time{})
 
 		case benchUp:
-			secs, err := readUint32(conn)
+			warmupSecs, err := readUint32(conn)
 			if err != nil {
 				return err
 			}
-			conn.SetReadDeadline(time.Now().Add(time.Duration(secs)*time.Second + 3*time.Second))
-			var total uint64
-			readDeadline := time.Now().Add(time.Duration(secs) * time.Second)
+			measureSecs, err := readUint32(conn)
+			if err != nil {
+				return err
+			}
+			total := time.Duration(warmupSecs+measureSecs)*time.Second + 3*time.Second
+			conn.SetReadDeadline(time.Now().Add(total))
+
+			// Unmeasured warmup: let the sender's congestion window ramp up
+			// before this side's clock (the one whose elapsed time actually
+			// gets reported back) starts.
+			warmDeadline := time.Now().Add(time.Duration(warmupSecs) * time.Second)
+			for time.Now().Before(warmDeadline) {
+				if _, err := conn.Read(buf); err != nil {
+					break
+				}
+			}
+
+			// Measured window. elapsed is this side's own wall-clock time,
+			// not the nominal measureSecs the client asked for — the client's
+			// write loop and this read loop start at slightly different
+			// instants (one network hop apart), and on a high-RTT link that
+			// skew was enough to systematically under-report upload speed
+			// when the client assumed its own nominal duration instead.
+			var recv uint64
+			start := time.Now()
+			readDeadline := start.Add(time.Duration(measureSecs) * time.Second)
 			for time.Now().Before(readDeadline) {
 				n, err := conn.Read(buf)
-				total += uint64(n)
+				recv += uint64(n)
 				if err != nil {
 					break
 				}
 			}
+			elapsed := time.Since(start)
 			conn.SetReadDeadline(time.Time{})
-			var out [8]byte
-			binary.BigEndian.PutUint64(out[:], total)
+
+			var out [16]byte
+			binary.BigEndian.PutUint64(out[:8], recv)
+			binary.BigEndian.PutUint64(out[8:], uint64(elapsed.Nanoseconds()))
 			if _, err := conn.Write(out[:]); err != nil {
 				return err
 			}
@@ -230,14 +264,11 @@ func measureLink(addr, token string) (benchResult, error) {
 	fmt.Printf("  RTT: min=%s avg=%s max=%s\n", res.minRTT.Round(time.Millisecond), res.avgRTT.Round(time.Millisecond), res.maxRTT.Round(time.Millisecond))
 
 	// Download
-	fmt.Printf("  measuring download for %s...\n", benchTestDuration)
+	fmt.Printf("  measuring download (%s warmup + %s test)...\n", benchWarmup, benchTestDuration)
 	if err := writeByte(conn, benchDown); err != nil {
 		return benchResult{}, err
 	}
-	if err := writeUint32(conn, uint32(benchTestDuration.Seconds())); err != nil {
-		return benchResult{}, err
-	}
-	res.downMbps, err = measureDownload(conn, benchTestDuration)
+	res.downMbps, err = measureDownload(conn, benchWarmup, benchTestDuration)
 	if err != nil {
 		return benchResult{}, err
 	}
@@ -253,14 +284,11 @@ func measureLink(addr, token string) (benchResult, error) {
 	drainQuiet(conn, 300*time.Millisecond)
 
 	// Upload
-	fmt.Printf("  measuring upload for %s...\n", benchTestDuration)
+	fmt.Printf("  measuring upload (%s warmup + %s test)...\n", benchWarmup, benchTestDuration)
 	if err := writeByte(conn, benchUp); err != nil {
 		return benchResult{}, err
 	}
-	if err := writeUint32(conn, uint32(benchTestDuration.Seconds())); err != nil {
-		return benchResult{}, err
-	}
-	res.upMbps, err = measureUpload(conn, benchTestDuration)
+	res.upMbps, err = measureUpload(conn, benchWarmup, benchTestDuration)
 	if err != nil {
 		return benchResult{}, err
 	}
@@ -301,15 +329,32 @@ func drainQuiet(conn net.Conn, quiet time.Duration) {
 	conn.SetReadDeadline(time.Time{})
 }
 
-func measureDownload(conn net.Conn, dur time.Duration) (float64, error) {
+// measureDownload sends the server a single combined duration (it just
+// blasts data for that long, blind to phases) and does the warmup/measure
+// split itself: read-and-discard for warmup so the connection is already at
+// steady-state throughput by the time the clock that decides the reported
+// number starts.
+func measureDownload(conn net.Conn, warmup, measure time.Duration) (float64, error) {
+	total := warmup + measure
+	if err := writeUint32(conn, uint32(total.Seconds())); err != nil {
+		return 0, err
+	}
 	buf := make([]byte, 64*1024)
-	var total int64
-	conn.SetReadDeadline(time.Now().Add(dur + 2*time.Second))
+	conn.SetReadDeadline(time.Now().Add(total + 2*time.Second))
+
+	warmDeadline := time.Now().Add(warmup)
+	for time.Now().Before(warmDeadline) {
+		if _, err := conn.Read(buf); err != nil {
+			break
+		}
+	}
+
+	var recv int64
 	start := time.Now()
-	deadline := start.Add(dur)
+	deadline := start.Add(measure)
 	for time.Now().Before(deadline) {
 		n, err := conn.Read(buf)
-		total += int64(n)
+		recv += int64(n)
 		if err != nil {
 			break
 		}
@@ -319,13 +364,28 @@ func measureDownload(conn net.Conn, dur time.Duration) (float64, error) {
 	if elapsed <= 0 {
 		return 0, nil
 	}
-	return float64(total) * 8 / elapsed / 1e6, nil
+	return float64(recv) * 8 / elapsed / 1e6, nil
 }
 
-func measureUpload(conn net.Conn, dur time.Duration) (float64, error) {
+// measureUpload tells the server the warmup/measure split explicitly (unlike
+// download, the server is the side doing the byte-counting here, so it has
+// to know), then just writes flat out for the whole warmup+measure window.
+// The Mbps figure comes back from the server's own measured elapsed time
+// (see serveBenchConn's benchUp case) rather than being computed from this
+// side's nominal request duration — the two loops start one network hop
+// apart, and on a real-RTT link that skew alone was enough to under-report.
+func measureUpload(conn net.Conn, warmup, measure time.Duration) (float64, error) {
+	if err := writeUint32(conn, uint32(warmup.Seconds())); err != nil {
+		return 0, err
+	}
+	if err := writeUint32(conn, uint32(measure.Seconds())); err != nil {
+		return 0, err
+	}
+
 	buf := make([]byte, 64*1024)
-	deadline := time.Now().Add(dur)
-	conn.SetWriteDeadline(time.Now().Add(dur + 5*time.Second))
+	total := warmup + measure
+	deadline := time.Now().Add(total)
+	conn.SetWriteDeadline(time.Now().Add(total + 5*time.Second))
 	for time.Now().Before(deadline) {
 		if _, err := conn.Write(buf); err != nil {
 			break
@@ -334,13 +394,18 @@ func measureUpload(conn net.Conn, dur time.Duration) (float64, error) {
 	conn.SetWriteDeadline(time.Time{})
 
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	var out [8]byte
+	var out [16]byte
 	if _, err := io.ReadFull(conn, out[:]); err != nil {
 		return 0, err
 	}
 	conn.SetReadDeadline(time.Time{})
-	total := binary.BigEndian.Uint64(out[:])
-	return float64(total) * 8 / dur.Seconds() / 1e6, nil
+	recv := binary.BigEndian.Uint64(out[:8])
+	elapsedNanos := binary.BigEndian.Uint64(out[8:])
+	if elapsedNanos == 0 {
+		return 0, nil
+	}
+	elapsedSecs := float64(elapsedNanos) / 1e9
+	return float64(recv) * 8 / elapsedSecs / 1e6, nil
 }
 
 // --- hardware + recommendation ------------------------------------------
