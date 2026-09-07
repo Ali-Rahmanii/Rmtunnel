@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Downloads and installs the latest rmtunnel release for this box's
 # architecture. Usage:
-#   curl -fsSL https://raw.githubusercontent.com/rm-aliii/rmtunnel/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/Ali-Rahmanii/rmtunnel/main/install.sh | sudo bash
 #
 # Safe to re-run: it just overwrites the installed binary with whatever the
 # latest release currently is.
 set -euo pipefail
 
-REPO="rm-aliii/rmtunnel"
+REPO="Ali-Rahmanii/rmtunnel"
 BIN_DIR="/usr/local/bin"
 CONF_DIR="/etc/rmtunnel"
 
@@ -47,12 +47,12 @@ if [ ! -f "${CONF_DIR}/server.toml" ] && [ ! -f "${CONF_DIR}/client.toml" ]; the
 fi
 
 echo
-"${BIN_DIR}/rmtunnel" 2>&1 | head -1 || true
 echo
-log "next steps:"
-echo "  1. edit ${CONF_DIR}/server.toml (or client.toml) — at minimum set 'token' and the disguise addresses"
-echo "  2. run it directly to test:  rmtunnel server ${CONF_DIR}/server.toml"
-echo "  3. or install the systemd service — see systemd/README.md in the repo"
-echo "  4. want to know which config preset fits this box and link? run:"
-echo "       rmtunnel bench server 0.0.0.0:9999 some-temp-token     (on one box)"
-echo "       rmtunnel bench client <other-box-ip>:9999 some-temp-token   (on the other)"
+log "installed. run this next:"
+echo
+echo "    sudo rmtunnel"
+echo
+echo "that opens an interactive menu that builds the config (Iran/server or"
+echo "Kharej/client side), tunes the OS, benchmarks the link, and installs the"
+echo "systemd service for you. example configs were also placed in"
+echo "${CONF_DIR}/*.toml.example if you'd rather write one by hand."

@@ -1,0 +1,136 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
+)
+
+const serviceTemplate = `[Unit]
+Description=rmtunnel %s
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%s %s %s
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=1048576
+%sNoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+`
+
+// installService writes and enables a systemd unit for role ("server" or
+// "client") running against the config at configPath. Linux-only — callers
+// check runtime.GOOS first.
+func installService(unit, role, configPath string) {
+	binPath, err := exec.LookPath("rmtunnel")
+	if err != nil {
+		// Not on PATH yet — assume the currently running binary is the one
+		// to use, and that it lives (or will be copied to) the usual place.
+		binPath = "/usr/local/bin/rmtunnel"
+		self, err := os.Executable()
+		if err == nil && self != binPath {
+			if data, err := os.ReadFile(self); err == nil {
+				if err := os.WriteFile(binPath, data, 0o755); err != nil {
+					fmt.Println(red("نتونستم باینری رو در " + binPath + " کپی کنم: " + err.Error()))
+					fmt.Println(dim("خودت دستی کپی کن: cp " + self + " " + binPath))
+				} else {
+					fmt.Println(green("باینری در " + binPath + " کپی شد."))
+				}
+			}
+		}
+	}
+
+	extra := ""
+	if role == "server" {
+		extra = "AmbientCapabilities=CAP_NET_BIND_SERVICE\n"
+	}
+	unitText := fmt.Sprintf(serviceTemplate, role, binPath, role, configPath, extra)
+	unitPath := "/etc/systemd/system/" + unit + ".service"
+
+	if err := os.WriteFile(unitPath, []byte(unitText), 0o644); err != nil {
+		fmt.Println(red("نتونستم فایل سرویس رو بنویسم: " + err.Error()))
+		return
+	}
+	fmt.Println(green("فایل سرویس نوشته شد: " + unitPath))
+
+	run("systemctl", "daemon-reload")
+	run("systemctl", "enable", "--now", unit)
+	fmt.Println(green("سرویس " + unit + " فعال و اجرا شد."))
+	fmt.Println(dim("برای دیدن لاگ‌ها:  journalctl -u " + unit + " -f"))
+}
+
+func run(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func serviceStatus(unit string) (active bool, detail string) {
+	out, err := run("systemctl", "is-active", unit)
+	out = trimNL(out)
+	if err != nil {
+		return false, out
+	}
+	return out == "active", out
+}
+
+func trimNL(s string) string {
+	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
+func menuStatus() {
+	sectionHeader("وضعیت سرویس‌ها")
+	if runtime.GOOS != "linux" {
+		fmt.Println(dim("این بخش فقط روی لینوکس (جایی که سرویس واقعاً نصب می‌شه) معنی داره."))
+		pressEnter()
+		return
+	}
+	for _, unit := range []string{"rmtunnel-server", "rmtunnel-client"} {
+		active, detail := serviceStatus(unit)
+		label := red("● غیرفعال")
+		if active {
+			label = green("● فعال")
+		}
+		fmt.Printf("  %-22s %s  %s\n", unit, label, dim(detail))
+	}
+	fmt.Println()
+	unit := readLineDefault("برای دیدن لاگ یه سرویس اسمش رو بزن (خالی=رد شو)", "")
+	if unit != "" {
+		out, _ := run("journalctl", "-u", unit, "-n", "40", "--no-pager")
+		fmt.Println(out)
+	}
+	pressEnter()
+}
+
+func menuUninstall() {
+	sectionHeader("حذف نصب")
+	if runtime.GOOS != "linux" {
+		fmt.Println(dim("این بخش فقط روی لینوکس معنی داره."))
+		pressEnter()
+		return
+	}
+	if !confirm(red("مطمئنی؟ این سرویس‌ها، باینری و کانفیگ‌ها رو حذف می‌کنه")+" (کانفیگ‌ها اختیاریه)", false) {
+		return
+	}
+	for _, unit := range []string{"rmtunnel-server", "rmtunnel-client"} {
+		run("systemctl", "disable", "--now", unit)
+		os.Remove("/etc/systemd/system/" + unit + ".service")
+	}
+	run("systemctl", "daemon-reload")
+	os.Remove("/usr/local/bin/rmtunnel")
+	fmt.Println(green("سرویس‌ها و باینری حذف شدن."))
+	if confirm("کانفیگ‌ها (/etc/rmtunnel) هم حذف بشن؟", false) {
+		os.RemoveAll("/etc/rmtunnel")
+		fmt.Println(green("کانفیگ‌ها هم حذف شدن."))
+	}
+	pressEnter()
+}

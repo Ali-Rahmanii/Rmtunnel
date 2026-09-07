@@ -20,8 +20,13 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
 	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(2)
+		runMenu()
+		return
+	}
+
+	if os.Args[1] == "menu" {
+		runMenu()
+		return
 	}
 
 	if os.Args[1] == "bench" {
@@ -64,11 +69,13 @@ func main() {
 
 func printUsage() {
 	fmt.Fprintf(os.Stderr, `usage:
+  %s                                (interactive menu)
+  %s menu
   %s server <config.toml>
   %s client <config.toml>
   %s bench server <listen_addr> <token>
   %s bench client <server_addr> <token>
-`, os.Args[0], os.Args[0], os.Args[0], os.Args[0])
+`, os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0])
 }
 
 func statsLoop(ctx context.Context, snapshot func() string) {

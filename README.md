@@ -70,13 +70,51 @@ handshake: **[docs/CENSORSHIP.md](docs/CENSORSHIP.md)**.
 
 ## Running it
 
+The easy way — an interactive menu (colored, in Persian) that walks you
+through setting up either side, tuning the OS, benchmarking, checking
+service status, updating, or uninstalling:
+
+```bash
+sudo rmtunnel
+```
+
+or directly, once you have a config (what the menu's wizards produce):
+
 ```bash
 ./rmtunnel server server.toml     # on the Iran box
 ./rmtunnel client client.toml     # on the Kharej box
 ```
 
-Commented example configs: [examples/server.toml](examples/server.toml),
+Commented example configs, if you'd rather write one by hand:
+[examples/server.toml](examples/server.toml),
 [examples/client.toml](examples/client.toml).
+
+### The menu
+
+```
+╔══════════════════════════════════════════════════╗
+║                     RM Tunnel                     ║
+║                    نسخه 0.1.0                     ║
+║      https://github.com/Ali-Rahmanii/rmtunnel     ║
+║              توسعه‌دهنده: Ali Rahmani              ║
+╚══════════════════════════════════════════════════╝
+
+منوی اصلی
+  1)  ساخت تانل ایران (سرور)
+  2)  ساخت تانل خارج (کلاینت)
+  3)  تیون سرور (بهینه‌سازی سیستم‌عامل)
+  4)  بنچمارک سرعت و سخت‌افزار
+  5)  وضعیت سرویس‌ها
+  6)  آپدیت اسکریپت
+  7)  حذف نصب
+  0)  خروج
+```
+
+Options 1/2 are wizards that ask for a token, mode, which disguises to
+enable, and (server side) which ports to forward — then write the config and
+offer to install it as a systemd service on the spot. Option 3 applies the
+sysctl tuning from `docs/TUNING.md` (BBR, socket buffer ceilings). Option 6
+checks this repo's GitHub Releases and replaces the running binary in place.
 
 ## Sizing the config for your hardware and link
 
@@ -95,7 +133,7 @@ heavy / insane) — plus the exact config block to paste in. See
 ## Installing on a server
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rm-aliii/rmtunnel/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Ali-Rahmanii/rmtunnel/main/install.sh | sudo bash
 ```
 
 Downloads the right binary for the box's architecture (amd64/arm64) from
