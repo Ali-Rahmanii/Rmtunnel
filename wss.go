@@ -88,12 +88,27 @@ func (c *wsConn) SetDeadline(t time.Time) error {
 
 // --- client side ------------------------------------------------------
 
-func wssDial(ctx context.Context, cfg *DisguiseConfig, timeout time.Duration) (net.Conn, error) {
+func wssDial(ctx context.Context, full *Config, cfg *DisguiseConfig, timeout time.Duration) (net.Conn, error) {
+	netDialer := &net.Dialer{Timeout: timeout}
 	dialer := websocket.Dialer{
 		HandshakeTimeout: timeout,
 		TLSClientConfig: &tls.Config{
 			ServerName:         cfg.Domain, // SNI, independent of the IP we actually dial
 			InsecureSkipVerify: cfg.Insecure,
+		},
+		// gorilla dials the raw TCP connection internally, which is exactly
+		// the connection recv_buf/send_buf/nodelay/MSS need to land on — a
+		// socket left at OS defaults caps throughput hard on any link with
+		// real RTT, regardless of how big the tunnel's own config says the
+		// buffers should be. Without this hook there is no way to reach that
+		// connection at all.
+		NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, err := netDialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			tuneTunnelConn(conn, full)
+			return conn, nil
 		},
 	}
 	u := url.URL{Scheme: "wss", Host: cfg.ServerAddr, Path: cfg.Path}
@@ -118,16 +133,36 @@ type wssListener struct {
 	ln     net.Listener
 }
 
-func startWSSListener(cfg *DisguiseConfig) (*wssListener, error) {
+// tunedListener wraps a net.Listener so every accepted connection gets
+// recv_buf/send_buf/nodelay/MSS applied before anything (TLS included) reads
+// or writes to it — see the matching comment in wssDial for why this has to
+// happen at the raw-accept layer, not after http.Server has already taken
+// the connection.
+type tunedListener struct {
+	net.Listener
+	cfg *Config
+}
+
+func (l *tunedListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	tuneTunnelConn(conn, l.cfg)
+	return conn, nil
+}
+
+func startWSSListener(full *Config, cfg *DisguiseConfig) (*wssListener, error) {
 	cert, err := loadOrGenerateCert(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("wss: certificate: %w", err)
 	}
 
-	ln, err := net.Listen("tcp", cfg.ListenAddr)
+	rawLn, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
 		return nil, err
 	}
+	ln := &tunedListener{Listener: rawLn, cfg: full}
 
 	l := &wssListener{connCh: make(chan net.Conn, 64), ln: ln}
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}

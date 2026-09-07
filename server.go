@@ -87,6 +87,9 @@ func (s *Server) Run(ctx context.Context) error {
 
 	for _, pm := range s.cfg.Ports {
 		go s.runPortListener(ctx, pm)
+		if pm.UDP {
+			go s.runUDPListener(ctx, pm)
+		}
 	}
 
 	<-ctx.Done()
@@ -391,42 +394,52 @@ func (s *Server) runPortListener(ctx context.Context, pm PortMap) {
 
 func (s *Server) handleLocalConn(ctx context.Context, local net.Conn, target string) {
 	obtainCtx, cancel := context.WithTimeout(ctx, s.cfg.DialTimeout.Duration+5*time.Second)
-	defer cancel()
+	carrier, release, ok := s.obtainCarrier(obtainCtx)
+	cancel()
+	if !ok {
+		local.Close()
+		return
+	}
+	defer release()
 
+	if err := writeString(carrier, target); err != nil {
+		carrier.Close()
+		local.Close()
+		return
+	}
+	Pipe(local, carrier, s.cfg.BufferSize)
+}
+
+// obtainCarrier borrows one unit of tunnel capacity — a pool connection in
+// tcp mode, a freshly opened stream on a session with spare room in tcpmux
+// mode — the operation both TCP and UDP forwarding need before they can
+// announce a target and start relaying. release must be called exactly once
+// when the caller is done with the carrier (Pipe/relay loop closing it is
+// not enough by itself in tcpmux mode, which also has to give back the
+// session's stream-count slot).
+func (s *Server) obtainCarrier(ctx context.Context) (carrier net.Conn, release func(), ok bool) {
 	switch s.cfg.Mode {
 	case "tcp":
-		pc := s.obtainPoolConn(obtainCtx)
+		pc := s.obtainPoolConn(ctx)
 		if pc == nil {
-			local.Close()
-			return
+			return nil, nil, false
 		}
-		if err := writeString(pc, target); err != nil {
-			pc.Close()
-			local.Close()
-			return
-		}
-		Pipe(local, pc, s.cfg.BufferSize)
+		return pc, func() {}, true
 
 	case "tcpmux":
-		ms := s.obtainSession(obtainCtx)
+		ms := s.obtainSession(ctx)
 		if ms == nil {
-			local.Close()
-			return
+			return nil, nil, false
 		}
 		stream, err := ms.session.OpenStream()
 		if err != nil {
-			local.Close()
-			return
+			return nil, nil, false
 		}
 		atomic.AddInt32(&ms.streams, 1)
-		defer atomic.AddInt32(&ms.streams, -1)
+		return stream, func() { atomic.AddInt32(&ms.streams, -1) }, true
 
-		if err := writeString(stream, target); err != nil {
-			stream.Close()
-			local.Close()
-			return
-		}
-		Pipe(local, stream, s.cfg.BufferSize)
+	default:
+		return nil, nil, false
 	}
 }
 

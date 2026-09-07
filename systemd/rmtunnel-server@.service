@@ -1,11 +1,11 @@
 [Unit]
-Description=rmtunnel server
+Description=rmtunnel server (%i)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/rmtunnel server /etc/rmtunnel/server.toml
+ExecStart=/usr/local/bin/rmtunnel server /etc/rmtunnel/tunnels/server/%i.toml
 Restart=on-failure
 RestartSec=2
 # The process itself already reconnects and fails over between disguise

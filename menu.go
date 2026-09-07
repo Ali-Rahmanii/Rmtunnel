@@ -95,9 +95,9 @@ func runMenu() {
 		fmt.Println(purple(strings.Repeat("─", 40)))
 		fmt.Println(menuItem("1", "Build Iran tunnel (server)"))
 		fmt.Println(menuItem("2", "Build Kharej tunnel (client)"))
-		fmt.Println(menuItem("3", "Tune server (OS optimization)"))
-		fmt.Println(menuItem("4", "Speed & hardware benchmark"))
-		fmt.Println(menuItem("5", "Service status"))
+		fmt.Println(menuItem("3", "Manage tunnels"))
+		fmt.Println(menuItem("4", "Tune server (OS optimization)"))
+		fmt.Println(menuItem("5", "Speed & hardware benchmark"))
 		fmt.Println(menuItem("6", "Update script"))
 		fmt.Println(menuItem("7", "Uninstall"))
 		fmt.Println(menuItem("0", "Exit"))
@@ -110,11 +110,11 @@ func runMenu() {
 		case "2":
 			wizardClient()
 		case "3":
-			menuTune()
+			menuManageTunnels()
 		case "4":
-			menuBenchInteractive()
+			menuTune()
 		case "5":
-			menuStatus()
+			menuBenchInteractive()
 		case "6":
 			menuUpdate()
 		case "7":

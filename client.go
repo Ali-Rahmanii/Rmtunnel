@@ -314,6 +314,11 @@ func (c *Client) tcpPoolWorker(ctx context.Context, p *profileState, epoch []byt
 		return
 	}
 
+	if addr, isUDP := isUDPTarget(target); isUDP {
+		c.handleUDPCarrier(ctx, conn, addr)
+		return
+	}
+
 	local, err := dialLocal(ctx, c.cfg, target)
 	if err != nil {
 		conn.Close()
@@ -384,6 +389,12 @@ func (c *Client) handleStream(ctx context.Context, cs *clientSession, stream *sm
 		stream.Close()
 		return
 	}
+
+	if addr, isUDP := isUDPTarget(target); isUDP {
+		c.handleUDPCarrier(ctx, stream, addr)
+		return
+	}
+
 	local, err := dialLocal(ctx, c.cfg, target)
 	if err != nil {
 		stream.Close()

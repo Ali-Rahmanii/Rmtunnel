@@ -1,11 +1,11 @@
 [Unit]
-Description=rmtunnel client
+Description=rmtunnel client (%i)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/rmtunnel client /etc/rmtunnel/client.toml
+ExecStart=/usr/local/bin/rmtunnel client /etc/rmtunnel/tunnels/client/%i.toml
 Restart=on-failure
 RestartSec=2
 LimitNOFILE=1048576

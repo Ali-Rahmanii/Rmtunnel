@@ -10,10 +10,12 @@ import (
 // PortMap describes one forwarded port: the server listens on Listen (e.g.
 // Iran box, publicly reachable) and, for every connection it accepts there,
 // asks the client to dial Target (e.g. 127.0.0.1:8080 on the Kharej box, or
-// any address the client machine can reach).
+// any address the client machine can reach). UDP additionally relays
+// datagrams on the same public port through the tunnel — see udp.go.
 type PortMap struct {
 	Listen string `toml:"listen"`
 	Target string `toml:"target"`
+	UDP    bool   `toml:"udp"`
 }
 
 // DisguiseConfig is one candidate way to carry the tunnel connection:
@@ -122,8 +124,15 @@ func (d *Duration) UnmarshalText(b []byte) error {
 	return nil
 }
 
-func LoadConfig(path string) (*Config, error) {
+// LoadConfig reads and validates a config file for role ("server" or
+// "client"). Role has to be set before validate() runs — it's what decides
+// which fields (listen_addr + ports for a server, server_addr for a client)
+// are actually required — so it takes role as a parameter rather than
+// leaving a caller to set cfg.Role on the result afterward, which would
+// validate against an empty role and silently skip those checks.
+func LoadConfig(path, role string) (*Config, error) {
 	cfg := defaultConfig()
+	cfg.Role = role
 	if _, err := toml.DecodeFile(path, cfg); err != nil {
 		return nil, fmt.Errorf("reading config %s: %w", path, err)
 	}

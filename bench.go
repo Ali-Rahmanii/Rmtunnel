@@ -171,10 +171,23 @@ type benchResult struct {
 }
 
 func runBenchClient(addr, token string) error {
+	res, err := measureLink(addr, token)
+	if err != nil {
+		return err
+	}
+	printRecommendation(res)
+	return nil
+}
+
+// measureLink runs the full RTT + throughput test against a bench server and
+// returns the raw result — used both by the `bench client` CLI command and
+// by the tunnel-creation wizard, which turns the result directly into config
+// values instead of just printing them.
+func measureLink(addr, token string) (benchResult, error) {
 	fmt.Printf("connecting to %s...\n", addr)
 	conn, err := net.DialTimeout("tcp", addr, 8*time.Second)
 	if err != nil {
-		return err
+		return benchResult{}, err
 	}
 	defer conn.Close()
 	tuneConn(conn, true, 15*time.Second, 4*1024*1024, 4*1024*1024)
@@ -182,17 +195,17 @@ func runBenchClient(addr, token string) error {
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
 	var challenge [16]byte
 	if _, err := io.ReadFull(conn, challenge[:]); err != nil {
-		return err
+		return benchResult{}, err
 	}
 	if _, err := conn.Write(hmacTag(token, challenge[:])); err != nil {
-		return err
+		return benchResult{}, err
 	}
 	ack, err := readByte(conn)
 	if err != nil {
-		return err
+		return benchResult{}, err
 	}
 	if ack != 1 {
-		return fmt.Errorf("server rejected the token")
+		return benchResult{}, fmt.Errorf("server rejected the token")
 	}
 	conn.SetDeadline(time.Time{})
 	fmt.Println("connected. running tests...")
@@ -204,11 +217,11 @@ func runBenchClient(addr, token string) error {
 	for i := 0; i < benchPings; i++ {
 		start := time.Now()
 		if err := writeByte(conn, benchPing); err != nil {
-			return err
+			return benchResult{}, err
 		}
 		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		if _, err := readByte(conn); err != nil {
-			return err
+			return benchResult{}, err
 		}
 		rtts = append(rtts, time.Since(start))
 	}
@@ -219,14 +232,14 @@ func runBenchClient(addr, token string) error {
 	// Download
 	fmt.Printf("  measuring download for %s...\n", benchTestDuration)
 	if err := writeByte(conn, benchDown); err != nil {
-		return err
+		return benchResult{}, err
 	}
 	if err := writeUint32(conn, uint32(benchTestDuration.Seconds())); err != nil {
-		return err
+		return benchResult{}, err
 	}
 	res.downMbps, err = measureDownload(conn, benchTestDuration)
 	if err != nil {
-		return err
+		return benchResult{}, err
 	}
 	fmt.Printf("  download: %.1f Mbps\n", res.downMbps)
 
@@ -242,19 +255,18 @@ func runBenchClient(addr, token string) error {
 	// Upload
 	fmt.Printf("  measuring upload for %s...\n", benchTestDuration)
 	if err := writeByte(conn, benchUp); err != nil {
-		return err
+		return benchResult{}, err
 	}
 	if err := writeUint32(conn, uint32(benchTestDuration.Seconds())); err != nil {
-		return err
+		return benchResult{}, err
 	}
 	res.upMbps, err = measureUpload(conn, benchTestDuration)
 	if err != nil {
-		return err
+		return benchResult{}, err
 	}
 	fmt.Printf("  upload: %.1f Mbps\n", res.upMbps)
 
-	printRecommendation(res)
-	return nil
+	return res, nil
 }
 
 func summarizeRTT(rtts []time.Duration) (min, avg, max time.Duration) {
@@ -388,44 +400,96 @@ func bdpBytes(mbps float64, rtt time.Duration) int {
 	return int(mbps * 1e6 / 8 * rtt.Seconds())
 }
 
-func printRecommendation(res benchResult) {
+// tunedTier is a tier matched against a real (or manually entered)
+// measurement, before and after the buffers that actually gate a single
+// flow's throughput get floored at the link's bandwidth-delay product.
+type tunedTier struct {
+	base    tierPreset
+	cores   int
+	ramMB   int
+	haveRAM bool
+	minMbps float64
+	rtt     time.Duration
+	bdp     int
+}
+
+func computeTier(res benchResult) tunedTier {
 	cores := runtime.NumCPU()
 	ramMB, haveRAM := localRAMMB()
 	minMbps := res.downMbps
 	if res.upMbps < minMbps {
 		minMbps = res.upMbps
 	}
+	return tunedTier{
+		base:    pickTier(cores, ramMB, minMbps),
+		cores:   cores,
+		ramMB:   ramMB,
+		haveRAM: haveRAM,
+		minMbps: minMbps,
+		rtt:     res.avgRTT,
+		bdp:     bdpBytes(minMbps, res.avgRTT),
+	}
+}
+
+// resolved returns the tier with recv_buf/send_buf (the raw socket window)
+// and mux_stream_buffer (smux's equivalent for a single multiplexed stream)
+// floored at the link's BDP. Undersized here is what silently caps a single
+// flow to a fraction of the link's real capacity no matter how fast the
+// link actually is — this was the concrete bug that made an early build of
+// this project run far slower than its raw measured bandwidth (recv_buf/
+// send_buf reached the socket fine, but the "wss" disguise's underlying
+// connection was never tuned at all — see wss.go's NetDialContext/
+// tunedListener — and mux_stream_buffer defaulted well under the BDP of any
+// non-trivial-RTT link regardless of disguise).
+func (t tunedTier) resolved() tierPreset {
+	out := t.base
+	if t.bdp > out.recvBuf {
+		out.recvBuf = t.bdp
+		out.sendBuf = t.bdp
+	}
+	if t.bdp > out.muxStreamBuffer {
+		out.muxStreamBuffer = t.bdp
+	}
+	// The session-wide receive cap has to hold several streams' worth of
+	// in-flight data at once, not just one.
+	if min := out.muxStreamBuffer * 4; out.muxRecvBuffer < min {
+		out.muxRecvBuffer = min
+	}
+	return out
+}
+
+func printRecommendation(res benchResult) {
+	t := computeTier(res)
+	tier := t.resolved()
 
 	fmt.Println()
 	fmt.Println("--- hardware (this box) ---")
-	fmt.Printf("  CPU cores: %d\n", cores)
-	if haveRAM {
-		fmt.Printf("  RAM: %d MB\n", ramMB)
+	fmt.Printf("  CPU cores: %d\n", t.cores)
+	if t.haveRAM {
+		fmt.Printf("  RAM: %d MB\n", t.ramMB)
 	} else {
 		fmt.Println("  RAM: unknown (only read on Linux — run this on the actual Linux server for a full picture)")
 	}
 
-	tier := pickTier(cores, ramMB, minMbps)
-	bdp := bdpBytes(minMbps, res.avgRTT)
-	recvSendBuf := tier.recvBuf
-	if bdp > recvSendBuf {
-		recvSendBuf = bdp
-	}
-
 	fmt.Println()
-	fmt.Printf("--- recommended tier: %s ---\n", tier.name)
-	fmt.Printf("  based on: %d cores, %.0f Mbps (weaker direction), %s avg RTT\n", cores, minMbps, res.avgRTT.Round(time.Millisecond))
-	if bdp > tier.recvBuf {
-		fmt.Printf("  recv_buf/send_buf raised above the tier default to %d KB to match this link's bandwidth-delay product\n", recvSendBuf/1024)
+	fmt.Printf("--- recommended tier: %s ---\n", t.base.name)
+	fmt.Printf("  based on: %d cores, %.0f Mbps (weaker direction), %s avg RTT\n", t.cores, t.minMbps, t.rtt.Round(time.Millisecond))
+	if tier.recvBuf > t.base.recvBuf {
+		fmt.Printf("  recv_buf/send_buf/mux_stream_buffer raised above the tier default to match this link's bandwidth-delay product (%d KB)\n", t.bdp/1024)
 	}
 	fmt.Println()
 	fmt.Println("paste this into your server.toml / client.toml:")
 	fmt.Println()
+	printTierTOML(tier)
+	fmt.Println(dim("reminder: recv_buf/send_buf this large also need net.core.rmem_max/wmem_max raised on Linux — see \"Tune Server\" in the menu, or docs/TUNING.md."))
+}
+
+func printTierTOML(tier tierPreset) {
 	fmt.Printf("min_idle = %d\n", tier.minIdle)
 	fmt.Printf("max_idle = %d\n", tier.maxIdle)
 	fmt.Printf("buffer_size = %d\n", tier.bufferSize)
-	fmt.Printf("recv_buf = %d\n", recvSendBuf)
-	fmt.Printf("send_buf = %d\n", recvSendBuf)
+	fmt.Printf("recv_buf = %d\n", tier.recvBuf)
+	fmt.Printf("send_buf = %d\n", tier.sendBuf)
 	fmt.Printf("max_streams_per_session = %d\n", tier.maxStreamsPerSession)
 	fmt.Printf("mux_frame_size = %d\n", tier.muxFrameSize)
 	fmt.Printf("mux_recv_buffer = %d\n", tier.muxRecvBuffer)

@@ -1,10 +1,12 @@
 # rmtunnel
 
-A small, self-contained reverse-tunnel core: **TCP** and **TCPMux**
-transports, three ways to disguise the connection (`plain` / `noise` /
-`wss`), automatic failover between them, and a built-in benchmark to size
-the config for your actual hardware and link. No web panel, no telegram bot
-— the goal isn't to out-feature a mature project like
+A small, self-contained reverse-tunnel core: **TCP and UDP** forwarding over
+**TCP/TCPMux** transports, three ways to disguise the connection (`plain` /
+`noise` / `wss`), automatic failover between them, multi-tunnel management,
+and a built-in benchmark that sizes the config to your actual hardware and
+link — and feeds straight into the setup wizard, so you don't have to
+hand-copy numbers. No web panel, no telegram bot — the goal isn't to
+out-feature a mature project like
 [BackPack](https://github.com/AminMGMT/BackPack); it's that every knob
 affecting performance or how the tunnel gets through filtering is a field in
 [config.go](config.go) you can find in ten seconds, and a code path you can
@@ -21,7 +23,9 @@ The server listens on `listen_addr`, and on every port under `[[ports]]`.
 The client dials *out* to the server — the Kharej side never needs an open
 inbound port. Each forwarded port's `target` is set on the **server**, and
 the **client** is the one that dials it — so the target can be anything the
-client machine can reach, not just its own localhost.
+client machine can reach, not just its own localhost. Setting `udp = true`
+on a `[[ports]]` entry also relays datagrams on that same port through the
+tunnel (WireGuard, game servers, anything UDP) — see [udp.go](udp.go).
 
 ### Two transport modes
 
@@ -102,19 +106,35 @@ Commented example configs, if you'd rather write one by hand:
 Main Menu
   1)  Build Iran tunnel (server)
   2)  Build Kharej tunnel (client)
-  3)  Tune server (OS optimization)
-  4)  Speed & hardware benchmark
-  5)  Service status
+  3)  Manage tunnels
+  4)  Tune server (OS optimization)
+  5)  Speed & hardware benchmark
   6)  Update script
   7)  Uninstall
   0)  Exit
 ```
 
-Options 1/2 are wizards that ask for a token, mode, which disguises to
-enable, and (server side) which ports to forward — then write the config and
-offer to install it as a systemd service on the spot. Option 3 applies the
-sysctl tuning from `docs/TUNING.md` (BBR, socket buffer ceilings). Option 6
-checks this repo's GitHub Releases and replaces the running binary in place.
+Options 1/2 are wizards that ask for a name (a box can run more than one
+tunnel — see below), a token, mode, which disguises to enable, and (server
+side) which ports to forward — accepting `1232`, `1232:2323`, or the
+explicit `1232=host:2323`, comma-separated for several at once, plus one
+question about also relaying UDP on them. Buffer sizing is either a live
+benchmark against the other box run right there in the wizard, numbers you
+already know entered by hand, or a named tier — see "Sizing the config"
+below. The wizard then writes the config and offers to install it as a
+systemd service on the spot.
+
+Option 3, **Manage tunnels**, lists every tunnel configured on the box and
+lets you edit (token, ports, disguises, or performance tier — each flagged
+if the peer needs the same change), start/stop/restart, tail logs, or
+delete it. A box can run several tunnels at once (each is its own named
+systemd service instance, `rmtunnel-<role>@<name>`) — a Iran box forwarding
+several unrelated services, say, or one box running both a server tunnel
+for one purpose and a client tunnel for another.
+
+Option 4 applies the sysctl tuning from `docs/TUNING.md` (BBR, socket buffer
+ceilings). Option 6 checks this repo's GitHub Releases and replaces the
+running binary in place.
 
 ## Sizing the config for your hardware and link
 
@@ -126,9 +146,15 @@ rmtunnel bench client <that-box-ip>:9999 some-temp-token
 ```
 
 Measures real RTT and throughput between the two boxes, reads local CPU/RAM,
-and prints a recommended tier — سبک/متوسط/سنگین/وحشتناک (light / medium /
-heavy / insane) — plus the exact config block to paste in. See
-[docs/TUNING.md](docs/TUNING.md) for what each of those knobs actually does.
+and prints a recommended tier (light / medium / heavy / insane) — plus the
+exact config block to paste in, with `recv_buf`/`send_buf`/`mux_stream_buffer`
+floored at the link's actual bandwidth-delay product. **This is the single
+biggest factor in real throughput** — a buffer smaller than bandwidth×RTT
+caps a connection's speed no matter how fast the link actually is,
+regardless of which disguise is carrying it. The setup wizard (menu options
+1/2) can run this same measurement for you inline instead of you copying
+numbers over by hand. See [docs/TUNING.md](docs/TUNING.md) for what each
+knob actually does.
 
 ## Installing on a server
 
@@ -157,6 +183,8 @@ without any special setup.
 
 - All three disguises (`plain`, `noise`, `wss`), end-to-end, both transport
   modes, against a real HTTP backend
+- UDP forwarding end-to-end, including session reuse across multiple
+  datagrams from the same source
 - Concurrent load (20 simultaneous requests) on every disguise/mode
   combination
 - Automatic profile failover: killed the active path mid-session, watched
@@ -166,13 +194,31 @@ without any special setup.
 - Client disconnect/reconnect, control-channel liveness (RTT/heartbeat) over
   a sustained connection
 - `rmtunnel bench` end-to-end (and two real desync bugs found and fixed
-  during that testing — see `bench.go`'s comments)
+  during that testing — see `bench.go`'s comments), plus the wizard's live
+  and manual buffer-sizing paths
+- The interactive menu's wizards (server and client), including every port
+  format, with scripted input — and a real bug this caught: input running
+  out used to spin the menu forever instead of exiting, now fixed
 - Cross-compilation to linux/amd64, linux/arm64, plus native Windows
+
+## A real bug this project found in itself
+
+Early on, the `wss` disguise was measurably far slower than its raw
+benchmarked bandwidth suggested it should be. The cause: `recv_buf`/
+`send_buf`/`nodelay` were being applied to every disguise's connection
+*except* `wss`'s — gorilla/websocket dials its own raw TCP connection
+internally, and nothing was hooking into that to tune it, so it ran at
+whatever the OS default socket buffers happened to be. Fixed by supplying
+`NetDialContext` on the client dialer and wrapping the server's listener so
+every accepted connection is tuned before TLS or the WebSocket upgrade ever
+touches it — see the comments in `wss.go` and `bench.go`'s `tunedTier`.
 
 ## What isn't here (on purpose — see docs/TUNING.md and docs/CENSORSHIP.md)
 
 - A TLS ClientHello that fingerprints as a real browser's (needs a uTLS-style
   library)
-- UDP forwarding (this project is TCP-only)
 - Per-connection bandwidth/rate limiting
 - A metrics dashboard beyond the periodic stats log line
+- Pushing a config change to the peer automatically (the editor tells you
+  when a change needs the same edit on the other side — it doesn't reach
+  across and make it, on purpose; see docs/CENSORSHIP.md)

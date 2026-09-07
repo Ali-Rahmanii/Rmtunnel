@@ -73,6 +73,39 @@ func readString(r io.Reader) (string, error) {
 	return string(buf), nil
 }
 
+// writeDatagram/readDatagram use the same 2-byte length-prefix framing as
+// writeString/readString, but sized for a full UDP payload (up to 65507
+// bytes) rather than the short target-address strings maxTargetLen caps —
+// see udp.go, which relays one UDP datagram per frame in each direction so
+// packet boundaries survive the trip through a byte-stream tunnel.
+func writeDatagram(w io.Writer, p []byte) error {
+	if len(p) > 65535 {
+		return fmt.Errorf("datagram too large: %d bytes", len(p))
+	}
+	var hdr [2]byte
+	binary.BigEndian.PutUint16(hdr[:], uint16(len(p)))
+	if _, err := w.Write(hdr[:]); err != nil {
+		return err
+	}
+	_, err := w.Write(p)
+	return err
+}
+
+func readDatagram(r io.Reader, buf []byte) (int, error) {
+	var hdr [2]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return 0, err
+	}
+	n := int(binary.BigEndian.Uint16(hdr[:]))
+	if n > len(buf) {
+		return 0, fmt.Errorf("datagram too large for buffer: %d bytes", n)
+	}
+	if _, err := io.ReadFull(r, buf[:n]); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func readByte(r io.Reader) (byte, error) {
 	var b [1]byte
 	if _, err := io.ReadFull(r, b[:]); err != nil {

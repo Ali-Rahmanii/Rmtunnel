@@ -43,11 +43,10 @@ func main() {
 	}
 	role, path := os.Args[1], os.Args[2]
 
-	cfg, err := LoadConfig(path)
+	cfg, err := LoadConfig(path, role)
 	if err != nil {
 		log.Fatalf("config error: %v", err)
 	}
-	cfg.Role = role
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

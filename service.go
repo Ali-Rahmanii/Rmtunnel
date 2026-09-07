@@ -87,30 +87,6 @@ func trimNL(s string) string {
 	return s
 }
 
-func menuStatus() {
-	sectionHeader("Service Status")
-	if runtime.GOOS != "linux" {
-		fmt.Println(dim("this section only applies on Linux, where the service is actually installed."))
-		pressEnter()
-		return
-	}
-	for _, unit := range []string{"rmtunnel-server", "rmtunnel-client"} {
-		active, detail := serviceStatus(unit)
-		label := red("● inactive")
-		if active {
-			label = green("● active")
-		}
-		fmt.Printf("  %-22s %s  %s\n", unit, label, dim(detail))
-	}
-	fmt.Println()
-	unit := readLineDefault("enter a service name to view its logs (blank=skip)", "")
-	if unit != "" {
-		out, _ := run("journalctl", "-u", unit, "-n", "40", "--no-pager")
-		fmt.Println(out)
-	}
-	pressEnter()
-}
-
 func menuUninstall() {
 	sectionHeader("Uninstall")
 	if runtime.GOOS != "linux" {
@@ -118,12 +94,13 @@ func menuUninstall() {
 		pressEnter()
 		return
 	}
-	if !confirm(red("are you sure? this removes the services, the binary, and (optionally) the configs"), false) {
+	tunnels := listTunnels()
+	if !confirm(red(fmt.Sprintf("are you sure? this stops and removes all %d configured tunnel(s), the binary, and (optionally) the configs", len(tunnels))), false) {
 		return
 	}
-	for _, unit := range []string{"rmtunnel-server", "rmtunnel-client"} {
-		run("systemctl", "disable", "--now", unit)
-		os.Remove("/etc/systemd/system/" + unit + ".service")
+	for _, t := range tunnels {
+		run("systemctl", "disable", "--now", t.unit())
+		os.Remove("/etc/systemd/system/" + t.unit() + ".service")
 	}
 	run("systemctl", "daemon-reload")
 	os.Remove("/usr/local/bin/rmtunnel")

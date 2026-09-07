@@ -38,12 +38,10 @@ chmod +x "$TMP"
 install -m 0755 "$TMP" "${BIN_DIR}/rmtunnel"
 log "installed to ${BIN_DIR}/rmtunnel"
 
-mkdir -p "$CONF_DIR"
-if [ ! -f "${CONF_DIR}/server.toml" ] && [ ! -f "${CONF_DIR}/client.toml" ]; then
-  if curl -fsSL -o "${CONF_DIR}/server.toml.example" "https://raw.githubusercontent.com/${REPO}/main/examples/server.toml" 2>/dev/null &&
-     curl -fsSL -o "${CONF_DIR}/client.toml.example" "https://raw.githubusercontent.com/${REPO}/main/examples/client.toml" 2>/dev/null; then
-    log "example configs placed in ${CONF_DIR}/*.toml.example — copy one to server.toml or client.toml and edit it"
-  fi
+mkdir -p "$CONF_DIR" "$CONF_DIR/tunnels/server" "$CONF_DIR/tunnels/client"
+if [ ! -f "${CONF_DIR}/server.toml.example" ]; then
+  curl -fsSL -o "${CONF_DIR}/server.toml.example" "https://raw.githubusercontent.com/${REPO}/main/examples/server.toml" 2>/dev/null || true
+  curl -fsSL -o "${CONF_DIR}/client.toml.example" "https://raw.githubusercontent.com/${REPO}/main/examples/client.toml" 2>/dev/null || true
 fi
 
 echo

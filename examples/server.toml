@@ -39,18 +39,27 @@ listen_addr = "0.0.0.0:9000"
 # --- forwarded ports -------------------------------------------------------
 # Every inbound connection on `listen` is forwarded to `target`, which the
 # CLIENT resolves and dials — so `target` can be 127.0.0.1:<port> on the
-# client box, or any address the client machine can reach.
+# client box, or any address the client machine can reach. udp=true also
+# relays datagrams on the same port through the tunnel (e.g. for WireGuard).
 [[ports]]
 listen = "0.0.0.0:8080"
 target = "127.0.0.1:8080"
+udp = false
 
 [[ports]]
 listen = "0.0.0.0:2053"
 target = "127.0.0.1:2053"
+udp = false
 
 heartbeat = "5s"
 
 # --- performance tuning: see docs/TUNING.md, or run `rmtunnel bench` -------
+# The values below are the "medium" tier. The single biggest factor for real
+# throughput is matching recv_buf/send_buf/mux_stream_buffer to this link's
+# bandwidth-delay product (bandwidth × RTT) — undersized here silently caps
+# a single connection's speed no matter how fast the link actually is. Run
+# `rmtunnel bench` (or the menu's wizard, which offers to run it for you)
+# instead of guessing.
 nodelay      = true
 keepalive    = "15s"
 recv_buf     = 262144
