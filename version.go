@@ -4,9 +4,10 @@ package main
 // this repo's GitHub Releases), and error messages that point people
 // somewhere useful.
 const (
-	Version   = "0.5.0"
-	RepoOwner = "Ali-Rahmanii"
-	RepoName  = "rmtunnel"
-	RepoURL   = "https://github.com/" + RepoOwner + "/" + RepoName
-	Author    = "Ali Rahmani"
+	Version        = "0.6.0"
+	RepoOwner      = "Ali-Rahmanii"
+	RepoName       = "rmtunnel"
+	RepoURL        = "https://github.com/" + RepoOwner + "/" + RepoName
+	Author         = "Ali Rahmani"
+	TelegramHandle = "@A_Alirahmani"
 )

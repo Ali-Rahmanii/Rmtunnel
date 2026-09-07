@@ -60,6 +60,20 @@ func wizardServer() {
 	direction := askDirection()
 	fmt.Println()
 
+	// Reverse: server listens (Kharej dials in). Direct: server dials out
+	// to Kharej instead — see Config.Direction in config.go.
+	listens := direction != "direct"
+	printOrderGuidance(listens)
+	fmt.Println()
+
+	if direction == "direct" {
+		if engine := askDirectEngine(); engine == "paqet" {
+			name := askTunnelName("paqet-client")
+			wizardPaqetIran(name)
+			return
+		}
+	}
+
 	name := askTunnelName("server")
 	fmt.Println()
 
@@ -74,9 +88,6 @@ func wizardServer() {
 	mode := askTransportMode()
 	fmt.Println()
 
-	// Reverse: server listens (Kharej dials in). Direct: server dials out
-	// to Kharej instead — see Config.Direction in config.go.
-	listens := direction != "direct"
 	disguises := askDisguises(listens, "Kharej box")
 	fmt.Println()
 
@@ -104,6 +115,20 @@ func wizardClient() {
 	direction := askDirection()
 	fmt.Println()
 
+	// Reverse: client dials out to Iran (the usual setup). Direct: client
+	// listens instead, and Iran dials it — see Config.Direction in config.go.
+	listens := direction == "direct"
+	printOrderGuidance(listens)
+	fmt.Println()
+
+	if direction == "direct" {
+		if engine := askDirectEngine(); engine == "paqet" {
+			name := askTunnelName("paqet-server")
+			wizardPaqetKharej(name)
+			return
+		}
+	}
+
 	name := askTunnelName("client")
 	fmt.Println()
 
@@ -117,9 +142,6 @@ func wizardClient() {
 	mode := askTransportMode()
 	fmt.Println()
 
-	// Reverse: client dials out to Iran (the usual setup). Direct: client
-	// listens instead, and Iran dials it — see Config.Direction in config.go.
-	listens := direction == "direct"
 	disguises := askDisguises(listens, "Iran server")
 	fmt.Println()
 
@@ -151,6 +173,34 @@ func askDirection() string {
 		return "direct"
 	}
 	return "reverse"
+}
+
+// printOrderGuidance states which side has to be up first: whichever one
+// listens under the chosen direction. Getting this backwards is the most
+// common way a first Direct-mode (or even Reverse) attempt fails for a
+// reason that has nothing to do with the config itself — the dialing side
+// just has nothing to connect to yet.
+func printOrderGuidance(thisBoxListens bool) {
+	if thisBoxListens {
+		fmt.Println(yellow("⚠ this box LISTENS under this direction — set it up and start it before the other side."))
+	} else {
+		fmt.Println(yellow("⚠ this box DIALS OUT under this direction — set up and start the other side FIRST, or this box has nothing to connect to yet."))
+	}
+}
+
+// askDirectEngine offers paqet as an alternative to rmtunnel's own native
+// Direct-mode dialer, only under Direction "direct" — paqet's own protocol
+// is inherently shaped that way (see paqet.go): the ports-owning side
+// always dials out first.
+func askDirectEngine() string {
+	fmt.Println(bold(magenta("Direct-mode engine")))
+	fmt.Println(menuItem("1", bold("rmtunnel")+dim(" (default)")+" — this project's own TCP/TCP Mux, dialing out"))
+	fmt.Println(menuItem("2", bold("paqet")+" — raw TCP packets + KCP, bypasses the kernel's own connection"))
+	fmt.Println("           tracking — needs root and libpcap on both boxes. github.com/hanselime/paqet")
+	if readLineDefault("choice", "1") == "2" {
+		return "paqet"
+	}
+	return "rmtunnel"
 }
 
 // askTransportMode is the "which TCP variant" question — both ends must

@@ -22,6 +22,13 @@ import (
 
 const tunnelsRoot = "/etc/rmtunnel/tunnels"
 
+// tunnelRoles is every directory listTunnels scans. "paqet-server" and
+// "paqet-client" are paqet tunnels (see paqet.go) — a second engine
+// entirely, stored as YAML instead of TOML, but living in the same
+// directory tree and shown in the same "Manage tunnels" list so a box
+// running a mix of engines still has one place to look.
+var tunnelRoles = []string{"server", "client", "paqet-server", "paqet-client"}
+
 var validNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func isValidTunnelName(name string) bool {
@@ -32,8 +39,19 @@ func tunnelDir(role string) string {
 	return filepath.Join(tunnelsRoot, role)
 }
 
+// tunnelConfigExt is ".yaml" for a paqet role, ".toml" for rmtunnel's own —
+// the one place that distinction is made, so everything else that handles a
+// tunnelRef generically (listing, start/stop/restart, logs, delete) never
+// has to know or care which engine it is.
+func tunnelConfigExt(role string) string {
+	if strings.HasPrefix(role, "paqet-") {
+		return ".yaml"
+	}
+	return ".toml"
+}
+
 func tunnelConfigPath(role, name string) string {
-	return filepath.Join(tunnelDir(role), name+".toml")
+	return filepath.Join(tunnelDir(role), name+tunnelConfigExt(role))
 }
 
 func systemdUnitInstance(role, name string) string {
@@ -41,27 +59,29 @@ func systemdUnitInstance(role, name string) string {
 }
 
 type tunnelRef struct {
-	Role string // "server" | "client"
+	Role string // "server" | "client" | "paqet-server" | "paqet-client"
 	Name string
 	Path string
 }
 
-func (t tunnelRef) unit() string { return systemdUnitInstance(t.Role, t.Name) }
+func (t tunnelRef) unit() string  { return systemdUnitInstance(t.Role, t.Name) }
+func (t tunnelRef) isPaqet() bool { return strings.HasPrefix(t.Role, "paqet-") }
 
-// listTunnels scans both role directories for configured tunnels, sorted by
+// listTunnels scans every role directory for configured tunnels, sorted by
 // role then name so the listing is stable across runs.
 func listTunnels() []tunnelRef {
 	var out []tunnelRef
-	for _, role := range []string{"server", "client"} {
+	for _, role := range tunnelRoles {
+		ext := tunnelConfigExt(role)
 		entries, err := os.ReadDir(tunnelDir(role))
 		if err != nil {
 			continue
 		}
 		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".toml") {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ext) {
 				continue
 			}
-			name := strings.TrimSuffix(e.Name(), ".toml")
+			name := strings.TrimSuffix(e.Name(), ext)
 			out = append(out, tunnelRef{Role: role, Name: name, Path: tunnelConfigPath(role, name)})
 		}
 	}
@@ -90,7 +110,7 @@ func menuManageTunnels() {
 			return
 		}
 
-		fmt.Println(dim("   #   role      name                  status"))
+		fmt.Println(dim("   #   role           name                  status"))
 		for i, t := range tunnels {
 			status := dim("-")
 			if runtime.GOOS == "linux" {
@@ -100,7 +120,7 @@ func menuManageTunnels() {
 			// Width specs apply to the plain role text before it's colored —
 			// padding an already-ANSI-wrapped string counts the escape bytes
 			// too and silently wrecks the column alignment this is for.
-			roleCol := roleTag(fmt.Sprintf("%-8s", t.Role))
+			roleCol := roleTag(fmt.Sprintf("%-13s", t.Role))
 			fmt.Printf("  %s   %s%-21s %s\n", bold(pink(fmt.Sprint(i+1))), roleCol, t.Name, status)
 		}
 		fmt.Println()
@@ -151,7 +171,8 @@ func menuFileLocations() {
 	sectionHeader("File Locations")
 	rows := [][2]string{
 		{"binary", "/usr/local/bin/rmtunnel"},
-		{"tunnel configs", tunnelsRoot + "/<role>/<name>.toml"},
+		{"paqet binary", paqetBinPath + " (see paqet.go)"},
+		{"tunnel configs", tunnelsRoot + "/<role>/<name>.toml (paqet: .../paqet-<role>/<name>.yaml)"},
 		{"systemd units", "/etc/systemd/system/rmtunnel-<role>@<name>.service"},
 		{"sysctl tuning", "/etc/sysctl.d/99-rmtunnel.conf"},
 		{"example configs", "/etc/rmtunnel/*.toml.example"},
@@ -230,6 +251,10 @@ func tunnelActionMenu(t tunnelRef) {
 // "push to the other side" channel here (the honest reason: it's one more
 // thing that could be blocked, not that it wouldn't be convenient).
 func editTunnel(t tunnelRef) {
+	if t.isPaqet() {
+		editPaqetTunnel(t)
+		return
+	}
 	sectionHeader("Edit: " + t.Name + " (" + t.Role + ")")
 	cfg, err := LoadConfig(t.Path, t.Role)
 	if err != nil {

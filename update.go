@@ -20,7 +20,16 @@ type ghRelease struct {
 }
 
 func fetchLatestRelease(timeout time.Duration) (*ghRelease, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", RepoOwner, RepoName)
+	return fetchLatestReleaseFrom(RepoOwner, RepoName, timeout)
+}
+
+// fetchLatestReleaseFrom is the same lookup against any repo — used for
+// this project's own updates and, separately, to find the current paqet
+// release (see paqet_install.go), which unlike this project's own assets
+// carries its version in the filename and so can't use a fixed
+// "latest/download" URL.
+func fetchLatestReleaseFrom(owner, repo string, timeout time.Duration) (*ghRelease, error) {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
 	client := &http.Client{Timeout: timeout}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {

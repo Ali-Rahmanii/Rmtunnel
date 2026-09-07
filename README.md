@@ -1,5 +1,7 @@
 # rmtunnel
 
+**مستندات فارسی: [README.fa.md](README.fa.md)**
+
 A small, self-contained reverse-tunnel core: **TCP and UDP** forwarding over
 **TCP/TCPMux** transports, three ways to disguise the connection (`plain` /
 `noise` / `wss`), automatic failover between them, multi-tunnel management,
@@ -40,6 +42,33 @@ See `Config.Direction`'s doc comment in [config.go](config.go) and
 [direct.go](direct.go) for how it's implemented — reusing every wire-level
 primitive (handshake, pool, mux) the reverse path already uses, not a
 second tunnel engine.
+
+**Setup order matters**: whichever side *listens* under the chosen direction
+has to be up first, or the dialing side has nothing to connect to yet.
+Reverse: Iran (server) first, then Kharej (client). Direct: Kharej (client)
+first, then Iran (server) — the wizard prints which one applies the moment
+you pick a direction.
+
+### paqet — raw-packet + KCP, as an alternative Direct-mode engine
+
+[paqet](https://github.com/hanselime/paqet) is a separate, independent
+project (MIT-licensed) that crafts and captures TCP packets directly with
+pcap — bypassing the host's own TCP/IP stack and connection tracking
+entirely — carrying KCP+smux on top for a fast, encrypted, multiplexed
+transport. That's a genuinely different engine from this project's own
+protocol.go, and a good one, so rather than reimplement it, the wizard
+**wraps the real thing**: downloads the right release binary, walks through
+every one of its own settings (network interface/IP/gateway MAC — with
+best-effort auto-detection on Linux, KCP mode including a "gaming" manual
+preset tuned for lowest ping, forward ports and SOCKS5 in the same format
+this project's own wizard already uses), applies the iptables `NOTRACK`
+rules paqet's docs say are required for stability under load, and installs
+it as its own systemd service — shown in the same "Manage tunnels" list as
+this project's own tunnels (`paqet-server`/`paqet-client` roles). See
+[paqet.go](paqet.go), [paqet_install.go](paqet_install.go), and
+[paqet_wizard.go](paqet_wizard.go). Because paqet's own "client" role (the
+side with forward/socks5) is also the side that dials first, a paqet tunnel
+is offered specifically as a Direct-mode engine choice.
 
 ### Two transport modes
 
@@ -110,13 +139,6 @@ Commented example configs, if you'd rather write one by hand:
 ### The menu
 
 ```
-╔══════════════════════════════════════════════════╗
-║                     RM Tunnel                     ║
-║                       v0.1.0                      ║
-║      https://github.com/Ali-Rahmanii/rmtunnel     ║
-║                  by Ali Rahmani                   ║
-╚══════════════════════════════════════════════════╝
-
 Main Menu
   1)  Build Iran tunnel (server)
   2)  Build Kharej tunnel (client)
@@ -125,22 +147,31 @@ Main Menu
   5)  Speed & hardware benchmark
   6)  Update script
   7)  Uninstall
+  H)  Help (how to run each tunnel type, step by step)
   0)  Exit
 ```
 
+(the real banner above this is a large block-letter wordmark, not this
+plain listing — see [color.go](color.go)'s `bigBannerLines`.)
+
 Options 1/2 are wizards that ask, in order: **direction** (reverse or
-direct — see above), a name (a box can run more than one tunnel — see
-below), a token, **transport** (TCP or TCP Mux, each with a one-line
-explanation of the tradeoff), which disguises to enable (plus, on whichever
-side dials out, optional **backup addresses** per disguise — tried in order
-if the primary one stops working, e.g. a second IP for the same box), and
+direct — see above, with the setup-order reminder printed right there),
+a name (a box can run more than one tunnel — see below), a token,
+**transport** (TCP or TCP Mux, each with a one-line explanation of the
+tradeoff — or, under Direct, a choice between this project's own engine and
+**paqet**, see above), which disguises to enable (plus, on whichever side
+dials out, optional **backup addresses** per disguise — tried in order if
+the primary one stops working, e.g. a second IP for the same box), and
 (server side) which ports to forward — accepting `1232`, `1232:2323`, or the
 explicit `1232=host:2323`, comma-separated for several at once, plus one
 question about also relaying UDP on them. Buffer sizing is either a live
 benchmark against the other box run right there in the wizard, numbers you
 already know entered by hand, or a named tier — see "Sizing the config"
 below. The wizard then writes the config and offers to install it as a
-systemd service on the spot.
+systemd service on the spot. Option **H, Help**, is a separate screen
+(kept out of the main menu itself) walking through each tunnel type
+step by step — Reverse, Direct, paqet, managing tunnels, and tiers/
+benchmarking — see [help.go](help.go).
 
 Option 3, **Manage tunnels**, lists every tunnel configured on the box and
 lets you edit (token, ports, disguises, or performance tier — each flagged
@@ -238,6 +269,11 @@ without any special setup.
   forwarding correctly through to the real backend either way
 - Backup-address rotation: a deliberately unreachable primary address,
   confirmed the client rotates to the configured backup and connects
+- paqet config generation: both the Kharej (`role: server`) and Iran
+  (`role: client`, forward + SOCKS5 + the "gaming" manual KCP preset) wizard
+  outputs loaded and validated cleanly through paqet's own real config
+  loader (`internal/conf.LoadFromFile`, built directly from its source as a
+  standalone check) — not just eyeballed against the schema
 - Cross-compilation to linux/amd64, linux/arm64, plus native Windows
 
 ## Real bugs this project found in itself
@@ -302,10 +338,11 @@ its own measured elapsed time instead of the client assuming its own — see
 
 - A TLS ClientHello that fingerprints as a real browser's (needs a uTLS-style
   library)
-- A raw UDP or KCP/QUIC *carrier* (as opposed to forwarding UDP traffic
-  *through* the existing TCP/TCPMux carrier, which `[[ports]]`'s `udp = true`
-  already does) — researched against `rathole`/`frp`, deliberately deferred
-  as a large, separate undertaking rather than rushed in; see docs/TUNING.md
+- A raw UDP or KCP/QUIC *carrier* implemented natively in this project (as
+  opposed to forwarding UDP traffic *through* the existing TCP/TCPMux
+  carrier, which `[[ports]]`'s `udp = true` already does) — paqet (above)
+  already does exactly this well, and wrapping it was a better use of effort
+  than building a second, worse version of the same idea from scratch
 - A full Layer-3/IP tunnel (BackPack's GRE-in-Noise mode) or multi-socket
   bandwidth bonding — `direction = "direct"` covers the TCP-level "the
   server's inbound doesn't get through" case without the much larger scope

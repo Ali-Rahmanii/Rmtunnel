@@ -58,7 +58,9 @@ func pressEnter() {
 	readLine(dim("press Enter to continue..."))
 }
 
-const bannerWidth = 54
+// bannerWidth is deliberately wide — a big, unmissable wordmark plus room
+// for the full repo URL and credit line without wrapping.
+const bannerWidth = 68
 
 func banner() string {
 	top := purple("╭" + strings.Repeat("─", bannerWidth) + "╮")
@@ -66,22 +68,19 @@ func banner() string {
 	bottom := purple("╰" + strings.Repeat("─", bannerWidth) + "╯")
 	side := purple("│")
 
-	title := gradientText(centerPad("R M   T U N N E L", bannerWidth))
+	lines := []string{top}
+	for _, row := range bigBannerLines("RM TUNNEL", bannerWidth) {
+		lines = append(lines, side+row+side)
+	}
 	tagline := dim(centerPad("reverse tunnel · anti-censorship · self-tuning", bannerWidth))
+	lines = append(lines, side+tagline+side, rule)
+
 	ver := bold(cyan(centerPad("v"+Version, bannerWidth)))
 	repo := dim(centerPad(RepoURL, bannerWidth))
-	author := dim(centerPad("by "+Author, bannerWidth))
+	credit := bold(pink(centerPad("by "+Author+"  ·  Telegram: "+TelegramHandle, bannerWidth)))
+	lines = append(lines, side+ver+side, side+repo+side, side+credit+side, bottom)
 
-	return strings.Join([]string{
-		top,
-		side + title + side,
-		side + tagline + side,
-		rule,
-		side + ver + side,
-		side + repo + side,
-		side + author + side,
-		bottom,
-	}, "\n")
+	return strings.Join(lines, "\n")
 }
 
 func centerPad(s string, width int) string {
@@ -105,7 +104,7 @@ func runMenu() {
 		}
 		fmt.Println()
 		fmt.Println(bold(magenta("  Main Menu")))
-		fmt.Println(gradientRule(40))
+		fmt.Println(gradientRule(bannerWidth))
 		fmt.Println(menuItem("1", "Build Iran tunnel "+dim("(server)")))
 		fmt.Println(menuItem("2", "Build Kharej tunnel "+dim("(client)")))
 		fmt.Println(menuItem("3", "Manage tunnels"))
@@ -113,11 +112,12 @@ func runMenu() {
 		fmt.Println(menuItem("5", "Speed & hardware benchmark"))
 		fmt.Println(menuItem("6", "Update script"))
 		fmt.Println(menuItem("7", "Uninstall"))
+		fmt.Println(menuItem("H", "Help "+dim("(how to run each tunnel type, step by step)")))
 		fmt.Println(menuItem("0", "Exit"))
-		fmt.Println(gradientRule(40))
+		fmt.Println(gradientRule(bannerWidth))
 
 		choice := readLine(bold(pink("choice ❯ ")))
-		switch choice {
+		switch strings.ToUpper(strings.TrimSpace(choice)) {
 		case "1":
 			wizardServer()
 		case "2":
@@ -132,6 +132,8 @@ func runMenu() {
 			menuUpdate()
 		case "7":
 			menuUninstall()
+		case "H":
+			menuHelp()
 		case "0":
 			fmt.Println(dim("bye."))
 			return
