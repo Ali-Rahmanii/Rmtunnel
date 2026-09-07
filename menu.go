@@ -87,9 +87,14 @@ func centerPad(s string, width int) string {
 }
 
 func runMenu() {
+	startUpdateCheck()
 	for {
 		clearScreen()
 		fmt.Println(banner())
+		if notice := currentUpdateNotice(); notice != "" {
+			fmt.Println()
+			fmt.Println(bold(yellow("⚠ " + notice)))
+		}
 		fmt.Println()
 		fmt.Println(bold(blue("Main Menu")))
 		fmt.Println(purple(strings.Repeat("─", 40)))

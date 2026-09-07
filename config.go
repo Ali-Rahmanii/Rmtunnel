@@ -72,13 +72,8 @@ type Config struct {
 	// the entire connection, handshake included, is encrypted besides.
 	Token string `toml:"token"`
 
-	// Disguise lists the candidate ways to carry the tunnel, most-preferred
-	// first. At least one enabled entry is required.
-	Disguise []DisguiseConfig `toml:"disguise"`
-
 	// --- server-only ---
-	Ports     []PortMap `toml:"ports"`
-	Heartbeat Duration  `toml:"heartbeat"` // control-channel liveness ping
+	Heartbeat Duration `toml:"heartbeat"` // control-channel liveness ping
 
 	// --- client-only ---
 	RetryMin Duration `toml:"retry_min"` // first reconnect backoff step
@@ -109,6 +104,18 @@ type Config struct {
 	MuxRecvBuffer        int      `toml:"mux_recv_buffer"`
 	MuxStreamBuffer      int      `toml:"mux_stream_buffer"`
 	MuxKeepAlive         Duration `toml:"mux_keepalive"`
+
+	// Disguise and Ports are array-of-tables ([[disguise]], [[ports]]) and
+	// MUST stay the last fields in this struct. TOML scopes every bare
+	// key to the most recently opened table — a scalar field declared (and
+	// therefore encoded) after one of these would land inside that table's
+	// last entry instead of at the top level and silently vanish, which is
+	// exactly the bug LoadConfig's Undecoded() check now catches on the way
+	// in. Keeping the struct's own field order correct is what keeps the
+	// *encoder* (tunnels.go's saveConfig) from ever producing that file in
+	// the first place.
+	Disguise []DisguiseConfig `toml:"disguise"`
+	Ports    []PortMap        `toml:"ports"`
 }
 
 // Duration wraps time.Duration so the TOML file can say "5s" / "500ms"
@@ -133,8 +140,22 @@ func (d *Duration) UnmarshalText(b []byte) error {
 func LoadConfig(path, role string) (*Config, error) {
 	cfg := defaultConfig()
 	cfg.Role = role
-	if _, err := toml.DecodeFile(path, cfg); err != nil {
+	meta, err := toml.DecodeFile(path, cfg)
+	if err != nil {
 		return nil, fmt.Errorf("reading config %s: %w", path, err)
+	}
+	// A key that decodes to nothing is not a harmless typo here: TOML scopes
+	// every bare key to the most recently opened table, so a key placed
+	// after a [[disguise]] or [[ports]] block silently becomes a field of
+	// that array entry instead of the top-level Config it was meant for —
+	// and since PortMap/DisguiseConfig don't have that field, the intended
+	// setting just vanishes, the file still "loads" successfully, and the
+	// tunnel quietly runs on whatever default that setting had. This is
+	// exactly the bug that made early buffer-tuning changes never actually
+	// take effect — see docs/TUNING.md. Undecoded() is the only thing that
+	// catches it, so a config with any is refused rather than run wrong.
+	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
+		return nil, fmt.Errorf("config %s: %d setting(s) not recognized (check they aren't placed after a [[disguise]] or [[ports]] block, which silently swallows anything meant for the top level): %v", path, len(undecoded), undecoded)
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -171,6 +192,9 @@ func (c *Config) validate() error {
 	}
 	if c.Token == "" {
 		return fmt.Errorf("token must not be empty")
+	}
+	if c.Mode == "tcpmux" && (c.MuxFrameSize <= 0 || c.MuxFrameSize > 65535) {
+		return fmt.Errorf("mux_frame_size must be between 1 and 65535 (smux's frame header is 16-bit) — got %d; 65536 is a common mistake, use 65535", c.MuxFrameSize)
 	}
 
 	nEnabled := 0

@@ -371,11 +371,19 @@ type tierPreset struct {
 	muxRecvBuffer, muxStreamBuffer, muxFrameSize int
 }
 
+// muxFrameSize is capped at 65535 everywhere below: smux's frame header
+// encodes it in 16 bits, so 65536 (a tempting round "64KB" value — and the
+// one this project shipped with in these two tiers until a real test caught
+// it) overflows and smux.VerifyConfig rejects the session outright. The
+// failure mode is exactly the kind that reads as "the tunnel is broken" for
+// the wrong reason: the control channel still connects fine (it isn't
+// smux), so it looks up, while every mux session silently fails to open —
+// see docs/TUNING.md and config.go's validate().
 var tiers = []tierPreset{
 	{"light", 2, 6, 16, 16 * 1024, 65536, 65536, 1 << 20, 256 << 10, 16 << 10},
 	{"medium", 4, 16, 64, 32 * 1024, 256 << 10, 256 << 10, 4 << 20, 1 << 20, 32 << 10},
-	{"heavy", 8, 32, 128, 64 * 1024, 1 << 20, 1 << 20, 8 << 20, 2 << 20, 64 << 10},
-	{"insane", 16, 64, 256, 128 * 1024, 4 << 20, 4 << 20, 16 << 20, 4 << 20, 64 << 10},
+	{"heavy", 8, 32, 128, 64 * 1024, 1 << 20, 1 << 20, 8 << 20, 2 << 20, 65535},
+	{"insane", 16, 64, 256, 128 * 1024, 4 << 20, 4 << 20, 16 << 20, 4 << 20, 65535},
 }
 
 func pickTier(cores, ramMB int, minMbps float64) tierPreset {

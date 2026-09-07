@@ -1,31 +1,16 @@
 # Runs on the Kharej box (or wherever the real services actually live). Dials
 # out to the server and keeps a pool of connections/sessions ready.
+#
+# IMPORTANT: keep [[disguise]] at the BOTTOM of this file. TOML scopes every
+# bare key to the most recently opened table, so a setting placed after that
+# block silently becomes a field of its last entry instead of a top-level
+# setting — the file still loads without an error, it just quietly ignores
+# whatever you meant to change. rmtunnel refuses to start on a config with
+# any such orphaned key, but the simplest way to never hit that is to add
+# new top-level settings up here, above [[disguise]], not below it.
 
 mode  = "tcpmux"                              # must match the server's config
 token = "CHANGE-ME-to-a-long-random-string"   # must match the server's config
-
-# --- disguise profiles ---------------------------------------------------
-# ORDER MATTERS here: the client tries these top to bottom, skipping any
-# still cooling down from a recent failure (see docs/CENSORSHIP.md). Put the
-# one you most want to use first.
-
-[[disguise]]
-type = "wss"
-enabled = true
-server_addr = "SERVER_PUBLIC_IP:443"
-domain = "your-domain-or-blank.example"   # must match the server's cert/SNI
-path = "/ws"
-insecure_skip_verify = false   # set true only while testing with a self-signed cert
-
-[[disguise]]
-type = "noise"
-enabled = true
-server_addr = "SERVER_PUBLIC_IP:9001"
-
-[[disguise]]
-type = "plain"
-enabled = true
-server_addr = "SERVER_PUBLIC_IP:9000"
 
 retry_min = "1s"
 retry_max = "30s"
@@ -50,3 +35,27 @@ mux_frame_size    = 32768
 mux_recv_buffer   = 4194304
 mux_stream_buffer = 1048576
 mux_keepalive     = "10s"
+
+# --- disguise profiles ---------------------------------------------------
+# ORDER MATTERS here: the client tries these top to bottom, skipping any
+# still cooling down from a recent failure (see docs/CENSORSHIP.md). Put the
+# one you most want to use first. Nothing may come after this block — see
+# the note at the top.
+
+[[disguise]]
+type = "wss"
+enabled = true
+server_addr = "SERVER_PUBLIC_IP:443"
+domain = "your-domain-or-blank.example"   # must match the server's cert/SNI
+path = "/ws"
+insecure_skip_verify = false   # set true only while testing with a self-signed cert
+
+[[disguise]]
+type = "noise"
+enabled = true
+server_addr = "SERVER_PUBLIC_IP:9001"
+
+[[disguise]]
+type = "plain"
+enabled = true
+server_addr = "SERVER_PUBLIC_IP:9000"

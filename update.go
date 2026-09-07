@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,9 +19,9 @@ type ghRelease struct {
 	} `json:"assets"`
 }
 
-func fetchLatestRelease() (*ghRelease, error) {
+func fetchLatestRelease(timeout time.Duration) (*ghRelease, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", RepoOwner, RepoName)
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: timeout}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -86,7 +87,7 @@ func menuUpdate() {
 	fmt.Println("current version: " + bold(Version))
 	fmt.Println(dim("checking " + RepoURL + " ..."))
 
-	rel, err := fetchLatestRelease()
+	rel, err := fetchLatestRelease(10 * time.Second)
 	if err != nil {
 		fmt.Println(red("failed to fetch release info: " + err.Error()))
 		pressEnter()
@@ -94,7 +95,7 @@ func menuUpdate() {
 	}
 	fmt.Println("latest published version: " + bold(rel.TagName))
 
-	if rel.TagName == "v"+Version || rel.TagName == Version {
+	if !isNewerVersion(rel.TagName) {
 		fmt.Println(green("already on the latest version."))
 		pressEnter()
 		return
@@ -130,6 +131,39 @@ func menuUpdate() {
 	}
 	fmt.Println(green("updated to " + rel.TagName + ". the next run will use the new version."))
 	pressEnter()
+}
+
+func isNewerVersion(tag string) bool {
+	return tag != "v"+Version && tag != Version
+}
+
+// --- startup update check -------------------------------------------------
+//
+// Checked once, in the background, the moment the menu starts — not on
+// every redraw, which would mean a GitHub API call every time a wizard or
+// submenu returns to the main screen. The result (empty until the check
+// finishes, or if it fails, or if this is already the latest version) is
+// picked up by the next banner draw, so it typically appears by the time
+// the user has read the main menu once.
+var updateNotice atomic.Pointer[string]
+
+func startUpdateCheck() {
+	go func() {
+		rel, err := fetchLatestRelease(4 * time.Second)
+		if err != nil || !isNewerVersion(rel.TagName) {
+			return
+		}
+		msg := fmt.Sprintf("A new version is available: %s (you're on v%s). Run \"Update script\" from the menu.", rel.TagName, Version)
+		updateNotice.Store(&msg)
+	}()
+}
+
+func currentUpdateNotice() string {
+	p := updateNotice.Load()
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 func menuBenchInteractive() {

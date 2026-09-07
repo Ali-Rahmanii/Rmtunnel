@@ -134,7 +134,9 @@ for one purpose and a client tunnel for another.
 
 Option 4 applies the sysctl tuning from `docs/TUNING.md` (BBR, socket buffer
 ceilings). Option 6 checks this repo's GitHub Releases and replaces the
-running binary in place.
+running binary in place — and the menu also checks in the background the
+moment it starts, so an out-of-date install shows a warning banner on its
+own rather than only when you remember to check.
 
 ## Sizing the config for your hardware and link
 
@@ -199,19 +201,41 @@ without any special setup.
 - The interactive menu's wizards (server and client), including every port
   format, with scripted input — and a real bug this caught: input running
   out used to spin the menu forever instead of exiting, now fixed
+- tcpmux throughput, A/B, small vs. correctly-applied buffers, through a
+  local RTT-injecting proxy (~80ms) — confirms the fix below and that
+  `mux_stream_buffer` scaling actually reaches the underlying socket
 - Cross-compilation to linux/amd64, linux/arm64, plus native Windows
 
-## A real bug this project found in itself
+## Real bugs this project found in itself
 
-Early on, the `wss` disguise was measurably far slower than its raw
-benchmarked bandwidth suggested it should be. The cause: `recv_buf`/
-`send_buf`/`nodelay` were being applied to every disguise's connection
-*except* `wss`'s — gorilla/websocket dials its own raw TCP connection
-internally, and nothing was hooking into that to tune it, so it ran at
-whatever the OS default socket buffers happened to be. Fixed by supplying
-`NetDialContext` on the client dialer and wrapping the server's listener so
-every accepted connection is tuned before TLS or the WebSocket upgrade ever
-touches it — see the comments in `wss.go` and `bench.go`'s `tunedTier`.
+**The big one:** every generated config (the shipped examples and the
+wizard's output alike) wrote the performance-tuning block *after* the
+`[[disguise]]`/`[[ports]]` sections. TOML scopes a bare key to the most
+recently opened table — so every tuning value silently became a stray field
+of the last `[[ports]]`/`[[disguise]]` entry instead of a top-level setting,
+the file loaded without any error, and the tunnel always ran on default
+(small) buffers no matter which tier you picked or what `bench` recommended.
+Caught by an actual A/B throughput test (a local RTT-injecting proxy, not
+just reasoning about it): **~12 MB/s with the bug, ~86 MB/s after the fix**,
+same link, same tier, tcpmux mode — about 7×. Fixed by reordering both
+`Config`'s struct fields and the wizard's TOML-writing functions so scalars
+always come first, *and* by making `LoadConfig` check
+[`MetaData.Undecoded()`](https://pkg.go.dev/github.com/BurntSushi/toml#MetaData.Undecoded)
+after every decode and refuse to start on any config with an orphaned key —
+so this exact class of bug can't silently happen again, in this project or
+in a hand-edited config.
+
+**Also found:** `mux_frame_size = 65536` in the `heavy`/`insane` tiers —
+smux encodes frame size in 16 bits, so the max is `65535`, and `65536`
+(a tempting round number) made every mux session fail to open while the
+control channel stayed up, which reads as "connected but nothing works"
+for a confusing reason. Fixed the tiers and added a `validate()` check.
+
+**And earlier:** the `wss` disguise never applied `recv_buf`/`send_buf`/
+`nodelay` to its underlying connection at all — gorilla/websocket dials its
+own raw TCP internally, and nothing hooked into that to tune it. Fixed via
+`NetDialContext` on the client dialer and a tuning listener wrapper on the
+server — see `wss.go` and `bench.go`'s `tunedTier`.
 
 ## What isn't here (on purpose — see docs/TUNING.md and docs/CENSORSHIP.md)
 

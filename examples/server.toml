@@ -1,8 +1,46 @@
 # Runs on the Iran box. Publicly reachable ports go here; each one is
 # forwarded to whatever the client dials on its own side.
+#
+# IMPORTANT: keep [[disguise]] and [[ports]] at the BOTTOM of this file.
+# TOML scopes every bare key to the most recently opened table, so a setting
+# placed after one of those blocks silently becomes a field of that block's
+# last entry instead of a top-level setting — the file still loads without
+# an error, it just quietly ignores whatever you meant to change. rmtunnel
+# refuses to start on a config with any such orphaned key, but the simplest
+# way to never hit that is to add new top-level settings up here, above the
+# [[...]] sections, not below them.
 
 mode  = "tcpmux"          # "tcp" or "tcpmux" — must match the client's config
 token = "CHANGE-ME-to-a-long-random-string"
+
+heartbeat = "5s"
+
+# --- performance tuning: see docs/TUNING.md, or run `rmtunnel bench` -------
+# The values below are the "medium" tier. The single biggest factor for real
+# throughput is matching recv_buf/send_buf/mux_stream_buffer to this link's
+# bandwidth-delay product (bandwidth × RTT) — undersized here silently caps
+# a single connection's speed no matter how fast the link actually is. Run
+# `rmtunnel bench` (or the menu's wizard, which offers to run it for you)
+# instead of guessing.
+nodelay      = true
+keepalive    = "15s"
+recv_buf     = 262144
+send_buf     = 262144
+dial_timeout = "8s"
+buffer_size  = 32768
+mss          = 0        # Linux only; set if this tunnel runs inside another
+                          # tunnel/VPN with a reduced MTU — see docs/TUNING.md
+reuse_port   = false     # Linux only; SO_REUSEPORT for heavy concurrent-accept load
+
+min_idle   = 4
+max_idle   = 16
+idle_grace = "20s"
+
+max_streams_per_session = 64
+mux_frame_size    = 32768
+mux_recv_buffer   = 4194304
+mux_stream_buffer = 1048576
+mux_keepalive     = "10s"
 
 # --- disguise profiles ---------------------------------------------------
 # List every way you want this tunnel reachable. The server listens on ALL
@@ -41,6 +79,7 @@ listen_addr = "0.0.0.0:9000"
 # CLIENT resolves and dials — so `target` can be 127.0.0.1:<port> on the
 # client box, or any address the client machine can reach. udp=true also
 # relays datagrams on the same port through the tunnel (e.g. for WireGuard).
+# Nothing may come after these two blocks — see the note at the top.
 [[ports]]
 listen = "0.0.0.0:8080"
 target = "127.0.0.1:8080"
@@ -50,32 +89,3 @@ udp = false
 listen = "0.0.0.0:2053"
 target = "127.0.0.1:2053"
 udp = false
-
-heartbeat = "5s"
-
-# --- performance tuning: see docs/TUNING.md, or run `rmtunnel bench` -------
-# The values below are the "medium" tier. The single biggest factor for real
-# throughput is matching recv_buf/send_buf/mux_stream_buffer to this link's
-# bandwidth-delay product (bandwidth × RTT) — undersized here silently caps
-# a single connection's speed no matter how fast the link actually is. Run
-# `rmtunnel bench` (or the menu's wizard, which offers to run it for you)
-# instead of guessing.
-nodelay      = true
-keepalive    = "15s"
-recv_buf     = 262144
-send_buf     = 262144
-dial_timeout = "8s"
-buffer_size  = 32768
-mss          = 0        # Linux only; set if this tunnel runs inside another
-                          # tunnel/VPN with a reduced MTU — see docs/TUNING.md
-reuse_port   = false     # Linux only; SO_REUSEPORT for heavy concurrent-accept load
-
-min_idle   = 4
-max_idle   = 16
-idle_grace = "20s"
-
-max_streams_per_session = 64
-mux_frame_size    = 32768
-mux_recv_buffer   = 4194304
-mux_stream_buffer = 1048576
-mux_keepalive     = "10s"
