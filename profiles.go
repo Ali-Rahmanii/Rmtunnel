@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log"
+	"net"
 	"time"
 )
 
@@ -44,14 +46,50 @@ const (
 	degradedStreak = 3
 )
 
-// profileState tracks one disguise candidate's recent luck.
+// profileState tracks one disguise candidate's recent luck, and — when its
+// config lists BackupAddrs — which address of that candidate is currently in
+// use. A profile is "which transport" (plain/noise/wss); addrIdx within it
+// is "which of that transport's addresses," a second, independent axis of
+// failover for when the box being dialed has more than one public address.
 type profileState struct {
 	cfg           *DisguiseConfig
 	failCount     int
 	cooldownUntil time.Time
+	addrIdx       int
 }
 
-func (p *profileState) label() string { return p.cfg.Type + " " + p.cfg.ServerAddr }
+func (p *profileState) label() string { return p.cfg.Type + " " + p.addr() }
+
+// addr is the address this profile is currently presenting: the primary
+// ServerAddr at index 0, or one of BackupAddrs after a rotation.
+func (p *profileState) addr() string {
+	if p.addrIdx == 0 || p.addrIdx-1 >= len(p.cfg.BackupAddrs) {
+		return p.cfg.ServerAddr
+	}
+	return p.cfg.BackupAddrs[p.addrIdx-1]
+}
+
+// rotateAddr advances to the next configured address for this profile,
+// wrapping back to the primary after the last backup — called on dial/
+// control-channel failure so the next attempt at this same profile tries a
+// different address instead of the one that just failed. A profile with no
+// BackupAddrs is unaffected (addrIdx always resolves back to ServerAddr).
+func (p *profileState) rotateAddr() {
+	if len(p.cfg.BackupAddrs) == 0 {
+		return
+	}
+	p.addrIdx = (p.addrIdx + 1) % (len(p.cfg.BackupAddrs) + 1)
+}
+
+// dialProfile dials profile p's currently-selected address — addr() rather
+// than p.cfg.ServerAddr directly, so backup-address rotation takes effect.
+// DisguiseConfig has no pointer/slice field dialDisguise mutates, so a
+// shallow copy with ServerAddr swapped is all this needs.
+func dialProfile(ctx context.Context, cfg *Config, p *profileState) (net.Conn, error) {
+	d := *p.cfg
+	d.ServerAddr = p.addr()
+	return dialDisguise(ctx, cfg, &d)
+}
 
 func buildProfiles(cfg *Config) []*profileState {
 	var out []*profileState

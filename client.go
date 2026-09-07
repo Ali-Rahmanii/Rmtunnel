@@ -54,7 +54,16 @@ func NewClient(cfg *Config) *Client {
 	}
 }
 
+// Run starts this Client's control+pool acquisition strategy: dialing out
+// with profile failover (Direction "reverse", the usual case), or listening
+// for the peer to dial in instead (Direction "direct" — see direct.go).
+// Either way, every carrier that results is handed to serveTarget the same
+// way once it's obtained.
 func (c *Client) Run(ctx context.Context) {
+	if !c.cfg.dialsOut() {
+		c.runListener(ctx)
+		return
+	}
 	bo := newBackoff(c.cfg.RetryMin.Duration, c.cfg.RetryMax.Duration)
 	for ctx.Err() == nil {
 		p := pickProfile(c.profiles)
@@ -64,19 +73,23 @@ func (c *Client) Run(ctx context.Context) {
 			return
 		}
 		lived := time.Since(startedAt)
+		label := p.label() // before any rotation below, so this log names the address that was actually just tried
 
 		switch {
 		case errors.Is(err, errDegraded):
 			p.onFailure(false)
+			p.rotateAddr()
 		case established && lived >= shortLivedThreshold:
 			p.onSuccess()
 			bo.reset()
 		case established:
 			p.onFailure(true) // connected, then died fast — likely interference
+			p.rotateAddr()
 		default:
 			p.onFailure(false) // never even connected
+			p.rotateAddr()
 		}
-		log.Printf("control channel [%s] ended after %s: %v — reconnecting", p.label(), lived.Round(time.Second), err)
+		log.Printf("control channel [%s] ended after %s: %v — reconnecting", label, lived.Round(time.Second), err)
 		bo.wait(ctx)
 	}
 }
@@ -86,7 +99,7 @@ func (c *Client) Run(ctx context.Context) {
 // reached the server" apart from "reached it, then something went wrong" —
 // the two cases the profile's health tracking treats very differently.
 func (c *Client) runOnce(ctx context.Context, p *profileState) (established bool, err error) {
-	conn, err := dialDisguise(ctx, c.cfg, p.cfg)
+	conn, err := dialProfile(ctx, c.cfg, p)
 	if err != nil {
 		return false, err
 	}
@@ -273,7 +286,7 @@ func (c *Client) tcpPoolWorker(ctx context.Context, p *profileState, epoch []byt
 	atomic.AddInt32(&c.activeCount, 1)
 	defer atomic.AddInt32(&c.activeCount, -1)
 
-	conn, err := dialDisguise(ctx, c.cfg, p.cfg)
+	conn, err := dialProfile(ctx, c.cfg, p)
 	if err != nil {
 		return
 	}
@@ -313,18 +326,27 @@ func (c *Client) tcpPoolWorker(ctx context.Context, p *profileState, epoch []byt
 		conn.Close()
 		return
 	}
+	c.serveTarget(ctx, conn, target)
+}
 
+// serveTarget acts on the target address a carrier (a raw pool connection in
+// tcp mode, a mux stream in tcpmux mode) was just told to reach — relay UDP,
+// or dial the real backend over TCP and pipe. This is the one place "what
+// does this side of the tunnel actually do with a carrier" lives, shared by
+// every way a carrier can arrive: dialed out (tcpPoolWorker above), accepted
+// as a mux stream (handleStream below), or accepted directly because this
+// box is listening under Direction "direct" (see direct.go).
+func (c *Client) serveTarget(ctx context.Context, carrier net.Conn, target string) {
 	if addr, isUDP := isUDPTarget(target); isUDP {
-		c.handleUDPCarrier(ctx, conn, addr)
+		c.handleUDPCarrier(ctx, carrier, addr)
 		return
 	}
-
 	local, err := dialLocal(ctx, c.cfg, target)
 	if err != nil {
-		conn.Close()
+		carrier.Close()
 		return
 	}
-	Pipe(local, conn, c.cfg.BufferSize)
+	Pipe(local, carrier, c.cfg.BufferSize)
 }
 
 // --- TCPMux mode --------------------------------------------------------
@@ -333,7 +355,7 @@ func (c *Client) muxSessionWorker(ctx context.Context, p *profileState, epoch []
 	atomic.AddInt32(&c.activeCount, 1)
 	defer atomic.AddInt32(&c.activeCount, -1)
 
-	conn, err := dialDisguise(ctx, c.cfg, p.cfg)
+	conn, err := dialProfile(ctx, c.cfg, p)
 	if err != nil {
 		return
 	}
@@ -389,18 +411,7 @@ func (c *Client) handleStream(ctx context.Context, cs *clientSession, stream *sm
 		stream.Close()
 		return
 	}
-
-	if addr, isUDP := isUDPTarget(target); isUDP {
-		c.handleUDPCarrier(ctx, stream, addr)
-		return
-	}
-
-	local, err := dialLocal(ctx, c.cfg, target)
-	if err != nil {
-		stream.Close()
-		return
-	}
-	Pipe(local, stream, c.cfg.BufferSize)
+	c.serveTarget(ctx, stream, target)
 }
 
 // Stats returns a short snapshot for the periodic status log in main.go.

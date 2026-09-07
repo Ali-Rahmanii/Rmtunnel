@@ -12,6 +12,13 @@
 mode  = "tcpmux"                              # must match the server's config
 token = "CHANGE-ME-to-a-long-random-string"   # must match the server's config
 
+# Must match the server's direction setting. "reverse" (default): this box
+# dials out to the server, as below. "direct": this box LISTENS instead (use
+# listen_addr in the [[disguise]] blocks below, same shape as server.toml) —
+# use it if the server's inbound port doesn't get through but its outbound
+# does. See README.md and config.go's Direction doc comment.
+direction = "reverse"
+
 retry_min = "1s"
 retry_max = "30s"
 heartbeat = "5s"
@@ -59,3 +66,4 @@ server_addr = "SERVER_PUBLIC_IP:9001"
 type = "plain"
 enabled = true
 server_addr = "SERVER_PUBLIC_IP:9000"
+# backup_addrs = ["SERVER_BACKUP_IP:9000"]   # tried in order if server_addr stops working — same box, another IP/domain

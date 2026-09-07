@@ -58,17 +58,25 @@ func pressEnter() {
 	readLine(dim("press Enter to continue..."))
 }
 
+const bannerWidth = 54
+
 func banner() string {
-	line := purple("╔" + strings.Repeat("═", 52) + "╗")
-	bottom := purple("╚" + strings.Repeat("═", 52) + "╝")
-	title := blue(bold(centerPad("RM Tunnel", 52)))
-	ver := cyan(centerPad("v"+Version, 52))
-	repo := dim(centerPad(RepoURL, 52))
-	author := dim(centerPad("by "+Author, 52))
-	side := purple("║")
+	top := purple("╭" + strings.Repeat("─", bannerWidth) + "╮")
+	rule := purple("├" + strings.Repeat("─", bannerWidth) + "┤")
+	bottom := purple("╰" + strings.Repeat("─", bannerWidth) + "╯")
+	side := purple("│")
+
+	title := gradientText(centerPad("R M   T U N N E L", bannerWidth))
+	tagline := dim(centerPad("reverse tunnel · anti-censorship · self-tuning", bannerWidth))
+	ver := bold(cyan(centerPad("v"+Version, bannerWidth)))
+	repo := dim(centerPad(RepoURL, bannerWidth))
+	author := dim(centerPad("by "+Author, bannerWidth))
+
 	return strings.Join([]string{
-		line,
+		top,
 		side + title + side,
+		side + tagline + side,
+		rule,
 		side + ver + side,
 		side + repo + side,
 		side + author + side,
@@ -93,22 +101,22 @@ func runMenu() {
 		fmt.Println(banner())
 		if notice := currentUpdateNotice(); notice != "" {
 			fmt.Println()
-			fmt.Println(bold(yellow("⚠ " + notice)))
+			fmt.Println(noticeBox(notice))
 		}
 		fmt.Println()
-		fmt.Println(bold(blue("Main Menu")))
-		fmt.Println(purple(strings.Repeat("─", 40)))
-		fmt.Println(menuItem("1", "Build Iran tunnel (server)"))
-		fmt.Println(menuItem("2", "Build Kharej tunnel (client)"))
+		fmt.Println(bold(magenta("  Main Menu")))
+		fmt.Println(gradientRule(40))
+		fmt.Println(menuItem("1", "Build Iran tunnel "+dim("(server)")))
+		fmt.Println(menuItem("2", "Build Kharej tunnel "+dim("(client)")))
 		fmt.Println(menuItem("3", "Manage tunnels"))
-		fmt.Println(menuItem("4", "Tune server (OS optimization)"))
+		fmt.Println(menuItem("4", "Tune server "+dim("(OS optimization)")))
 		fmt.Println(menuItem("5", "Speed & hardware benchmark"))
 		fmt.Println(menuItem("6", "Update script"))
 		fmt.Println(menuItem("7", "Uninstall"))
 		fmt.Println(menuItem("0", "Exit"))
-		fmt.Println(purple(strings.Repeat("─", 40)))
+		fmt.Println(gradientRule(40))
 
-		choice := readLine(bold("choice: "))
+		choice := readLine(bold(pink("choice ❯ ")))
 		switch choice {
 		case "1":
 			wizardServer()
@@ -134,13 +142,18 @@ func runMenu() {
 	}
 }
 
-func menuItem(key, label string) string {
-	return "  " + bold(cyan(key)) + ")  " + label
-}
-
-func sectionHeader(title string) {
-	clearScreen()
-	fmt.Println(purple(bold(title)))
-	fmt.Println(purple(strings.Repeat("─", len([]rune(title))+4)))
-	fmt.Println()
+// noticeBox wraps a warning line (currently just the update-available
+// banner) in a small bordered box so it draws the eye without looking like
+// an error — a plain "⚠ ..." line blended in with everything else above it.
+func noticeBox(msg string) string {
+	width := bannerWidth
+	text := "⚠ " + msg
+	runes := []rune(text)
+	if len(runes) > width-2 {
+		text = string(runes[:width-5]) + "..."
+	}
+	top := yellow("╭" + strings.Repeat("─", width) + "╮")
+	bottom := yellow("╰" + strings.Repeat("─", width) + "╯")
+	side := yellow("│")
+	return top + "\n" + side + bold(yellow(centerPad(text, width))) + side + "\n" + bottom
 }

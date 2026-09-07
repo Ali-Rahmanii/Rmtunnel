@@ -13,6 +13,13 @@
 mode  = "tcpmux"          # "tcp" or "tcpmux" — must match the client's config
 token = "CHANGE-ME-to-a-long-random-string"
 
+# "reverse" (default): the client dials out to this box — the usual setup.
+# "direct": this box dials out to the client instead — use it if THIS box's
+# inbound port doesn't get through but its outbound does. Either way, this
+# box keeps exposing [[ports]] to real users; only who dials whom changes.
+# See README.md and config.go's Direction doc comment.
+direction = "reverse"
+
 heartbeat = "5s"
 
 # --- performance tuning: see docs/TUNING.md, or run `rmtunnel bench` -------
@@ -73,6 +80,13 @@ listen_addr = "0.0.0.0:9001"
 type = "plain"                # raw TCP, cheapest, most fingerprintable — last resort
 enabled = true
 listen_addr = "0.0.0.0:9000"
+
+# Under direction = "direct", this box dials out instead of listening, so
+# every entry above would use server_addr (the client's address) here
+# instead of listen_addr — same shape as client.toml's disguise blocks,
+# including the optional backup_addrs list below.
+# server_addr   = "CLIENT_PUBLIC_IP:9000"
+# backup_addrs  = ["CLIENT_BACKUP_IP:9000"]   # tried in order if server_addr stops working
 
 # --- forwarded ports -------------------------------------------------------
 # Every inbound connection on `listen` is forwarded to `target`, which the

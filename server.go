@@ -55,6 +55,22 @@ func NewServer(cfg *Config) *Server {
 // client's next connection attempt uses, that listener is already up and
 // already feeds the same admitTunnelConn. See profiles.go for the reasoning.
 func (s *Server) Run(ctx context.Context) error {
+	// Ports are always this box's job regardless of Direction — the "server"
+	// role always owns [[ports]] and always exposes them to real users; only
+	// how the control channel/pool capacity is obtained changes. See
+	// direct.go.
+	for _, pm := range s.cfg.Ports {
+		go s.runPortListener(ctx, pm)
+		if pm.UDP {
+			go s.runUDPListener(ctx, pm)
+		}
+	}
+
+	if s.cfg.dialsOut() {
+		s.runDialer(ctx)
+		return nil
+	}
+
 	var enabled []*DisguiseConfig
 	for i := range s.cfg.Disguise {
 		if s.cfg.Disguise[i].Enabled {
@@ -83,13 +99,6 @@ func (s *Server) Run(ctx context.Context) error {
 			<-ctx.Done()
 			acc.Close()
 		}(acc)
-	}
-
-	for _, pm := range s.cfg.Ports {
-		go s.runPortListener(ctx, pm)
-		if pm.UDP {
-			go s.runUDPListener(ctx, pm)
-		}
 	}
 
 	<-ctx.Done()

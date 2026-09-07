@@ -90,22 +90,38 @@ func menuManageTunnels() {
 			return
 		}
 
+		fmt.Println(dim("   #   role      name                  status"))
 		for i, t := range tunnels {
-			status := "-"
+			status := dim("-")
 			if runtime.GOOS == "linux" {
 				active, _ := serviceStatus(t.unit())
-				status = red("inactive")
-				if active {
-					status = green("active")
-				}
+				status = statusBadge(active)
 			}
-			fmt.Printf("  %s) [%s] %-20s %s\n", bold(cyan(fmt.Sprint(i+1))), t.Role, t.Name, status)
+			// Width specs apply to the plain role text before it's colored —
+			// padding an already-ANSI-wrapped string counts the escape bytes
+			// too and silently wrecks the column alignment this is for.
+			roleCol := roleTag(fmt.Sprintf("%-8s", t.Role))
+			fmt.Printf("  %s   %s%-21s %s\n", bold(pink(fmt.Sprint(i+1))), roleCol, t.Name, status)
 		}
+		fmt.Println()
+		fmt.Println(menuItem("R", "Restart ALL"))
+		fmt.Println(menuItem("H", "Health check"))
+		fmt.Println(menuItem("F", "File locations"))
 		fmt.Println(menuItem("0", "back"))
 
 		choice := readLine("choice: ")
-		if choice == "0" || choice == "" {
+		switch strings.ToUpper(strings.TrimSpace(choice)) {
+		case "0", "":
 			return
+		case "R":
+			restartAllTunnels(tunnels)
+			continue
+		case "H":
+			menuHealthCheck(tunnels)
+			continue
+		case "F":
+			menuFileLocations()
+			continue
 		}
 		idx := indexFromChoice(choice, len(tunnels))
 		if idx < 0 {
@@ -115,6 +131,37 @@ func menuManageTunnels() {
 		}
 		tunnelActionMenu(tunnels[idx])
 	}
+}
+
+func restartAllTunnels(tunnels []tunnelRef) {
+	if !confirm(fmt.Sprintf("restart all %d tunnel(s) now?", len(tunnels)), true) {
+		return
+	}
+	for _, t := range tunnels {
+		if _, err := run("systemctl", "restart", t.unit()); err != nil {
+			fmt.Println(red("  failed to restart " + t.unit()))
+		} else {
+			fmt.Println(green("  restarted " + t.unit()))
+		}
+	}
+	pressEnter()
+}
+
+func menuFileLocations() {
+	sectionHeader("File Locations")
+	rows := [][2]string{
+		{"binary", "/usr/local/bin/rmtunnel"},
+		{"tunnel configs", tunnelsRoot + "/<role>/<name>.toml"},
+		{"systemd units", "/etc/systemd/system/rmtunnel-<role>@<name>.service"},
+		{"sysctl tuning", "/etc/sysctl.d/99-rmtunnel.conf"},
+		{"example configs", "/etc/rmtunnel/*.toml.example"},
+	}
+	for _, r := range rows {
+		fmt.Printf("  %-16s %s\n", bold(r[0]), dim(r[1]))
+	}
+	fmt.Println()
+	fmt.Println(dim("logs: journalctl -u rmtunnel-<role>@<name> -f"))
+	pressEnter()
 }
 
 func indexFromChoice(choice string, n int) int {
@@ -132,11 +179,7 @@ func tunnelActionMenu(t tunnelRef) {
 	for {
 		sectionHeader(fmt.Sprintf("Tunnel: %s (%s)", t.Name, t.Role))
 		active, detail := serviceStatus(t.unit())
-		statusLabel := red("● inactive")
-		if active {
-			statusLabel = green("● active")
-		}
-		fmt.Printf("  status: %s  %s\n\n", statusLabel, dim(detail))
+		fmt.Printf("  status: %s  %s\n\n", statusBadge(active), dim(detail))
 
 		fmt.Println(menuItem("1", "Edit"))
 		fmt.Println(menuItem("2", "Start"))
@@ -195,15 +238,20 @@ func editTunnel(t tunnelRef) {
 		return
 	}
 
-	fmt.Println(bold("current settings:"))
-	fmt.Printf("  mode: %s\n", cfg.Mode)
+	// listens tracks who dials vs. who listens for THIS box under its
+	// configured Direction — not raw Role, which under Direction "direct"
+	// has the roles of "listens" and "dials" swapped. See Config.dialsOut().
+	listens := !cfg.dialsOut()
+
+	fmt.Println(bold(magenta("current settings:")))
+	fmt.Printf("  mode: %s (direction: %s)\n", cfg.Mode, cfg.Direction)
 	for _, d := range cfg.Disguise {
 		state := "disabled"
 		if d.Enabled {
 			state = "enabled"
 		}
 		addr := d.ListenAddr
-		if t.Role == "client" {
+		if !listens {
 			addr = d.ServerAddr
 		}
 		fmt.Printf("  disguise %s: %s (%s)\n", d.Type, state, addr)
@@ -246,7 +294,11 @@ func editTunnel(t tunnelRef) {
 		cfg.Ports = askPorts()
 
 	case choice == fmt.Sprint(disguiseOpt):
-		cfg.Disguise = disguiseAnswersToConfig(askDisguises(t.Role == "server"), t.Role == "server")
+		peerLabel := "Iran server"
+		if t.Role == "server" {
+			peerLabel = "Kharej box"
+		}
+		cfg.Disguise = disguiseAnswersToConfig(askDisguises(listens, peerLabel), listens)
 		fmt.Println(yellow("⚠ update the peer's disguise list to match, or some/all failover paths will be lost."))
 
 	case choice == fmt.Sprint(tierOpt):
@@ -285,14 +337,15 @@ func joinPortSpecs(ports []PortMap) string {
 	return strings.Join(specs, ", ")
 }
 
-func disguiseAnswersToConfig(answers []disguiseAnswer, isServer bool) []DisguiseConfig {
+func disguiseAnswersToConfig(answers []disguiseAnswer, listens bool) []DisguiseConfig {
 	out := make([]DisguiseConfig, len(answers))
 	for i, d := range answers {
 		dc := DisguiseConfig{
 			Type: d.Type, Enabled: true, Domain: d.Domain, Path: d.Path,
 			CertFile: d.CertFile, KeyFile: d.KeyFile, Insecure: d.Insecure,
+			BackupAddrs: d.BackupAddrs,
 		}
-		if isServer {
+		if listens {
 			dc.ListenAddr = d.Addr
 		} else {
 			dc.ServerAddr = d.Addr

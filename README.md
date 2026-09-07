@@ -27,6 +27,20 @@ client machine can reach, not just its own localhost. Setting `udp = true`
 on a `[[ports]]` entry also relays datagrams on that same port through the
 tunnel (WireGuard, game servers, anything UDP) — see [udp.go](udp.go).
 
+### Direction: reverse (default) or direct
+
+`direction = "reverse"` is the setup above — the client dials the server.
+`direction = "direct"` flips *only* who dials whom for the tunnel's control
+channel and pool/mux capacity: the server dials the client instead, and the
+client listens. Everything else is unchanged — the server still owns
+`[[ports]]` and still exposes them to real users; the client still resolves
+and dials the real backend. Use it when the server box's inbound port
+doesn't get through (blocked, NAT without a forward) but its outbound does.
+See `Config.Direction`'s doc comment in [config.go](config.go) and
+[direct.go](direct.go) for how it's implemented — reusing every wire-level
+primitive (handshake, pool, mux) the reverse path already uses, not a
+second tunnel engine.
+
 ### Two transport modes
 
 | mode | how it works | when |
@@ -114,9 +128,13 @@ Main Menu
   0)  Exit
 ```
 
-Options 1/2 are wizards that ask for a name (a box can run more than one
-tunnel — see below), a token, mode, which disguises to enable, and (server
-side) which ports to forward — accepting `1232`, `1232:2323`, or the
+Options 1/2 are wizards that ask, in order: **direction** (reverse or
+direct — see above), a name (a box can run more than one tunnel — see
+below), a token, **transport** (TCP or TCP Mux, each with a one-line
+explanation of the tradeoff), which disguises to enable (plus, on whichever
+side dials out, optional **backup addresses** per disguise — tried in order
+if the primary one stops working, e.g. a second IP for the same box), and
+(server side) which ports to forward — accepting `1232`, `1232:2323`, or the
 explicit `1232=host:2323`, comma-separated for several at once, plus one
 question about also relaying UDP on them. Buffer sizing is either a live
 benchmark against the other box run right there in the wizard, numbers you
@@ -130,7 +148,13 @@ if the peer needs the same change), start/stop/restart, tail logs, or
 delete it. A box can run several tunnels at once (each is its own named
 systemd service instance, `rmtunnel-<role>@<name>`) — a Iran box forwarding
 several unrelated services, say, or one box running both a server tunnel
-for one purpose and a client tunnel for another.
+for one purpose and a client tunnel for another. The same screen also has
+**Restart ALL** (every configured tunnel, one confirm), **Health check**
+(root/systemd/BBR/qdisc, per-tunnel token strength, buffer values that
+exceed the OS's socket-buffer ceiling, and forwarded/disguise ports that
+collide between two tunnels on the same box — each with a concrete fix, not
+just a red X), and **File locations** (where every config/unit/log actually
+is, for when you'd rather look yourself).
 
 Option 4 applies the sysctl tuning from `docs/TUNING.md` (BBR, socket buffer
 ceilings). Option 6 checks this repo's GitHub Releases, replaces the running
@@ -153,7 +177,7 @@ rmtunnel bench client <that-box-ip>:9999 some-temp-token
 ```
 
 Measures real RTT and throughput between the two boxes, reads local CPU/RAM,
-and prints a recommended tier (light / medium / heavy / insane) — plus the
+and prints a recommended tier (light / medium / heavy / extreme / insane) — plus the
 exact config block to paste in, with `recv_buf`/`send_buf`/`mux_stream_buffer`
 floored at the link's actual bandwidth-delay product. **This is the single
 biggest factor in real throughput** — a buffer smaller than bandwidth×RTT
@@ -209,6 +233,11 @@ without any special setup.
 - tcpmux throughput, A/B, small vs. correctly-applied buffers, through a
   local RTT-injecting proxy (~80ms) — confirms the fix below and that
   `mux_stream_buffer` scaling actually reaches the underlying socket
+- `direction = "direct"` end-to-end, both transport modes, single and
+  concurrent requests — the server dialing out, the client listening,
+  forwarding correctly through to the real backend either way
+- Backup-address rotation: a deliberately unreachable primary address,
+  confirmed the client rotates to the configured backup and connects
 - Cross-compilation to linux/amd64, linux/arm64, plus native Windows
 
 ## Real bugs this project found in itself
@@ -273,8 +302,18 @@ its own measured elapsed time instead of the client assuming its own — see
 
 - A TLS ClientHello that fingerprints as a real browser's (needs a uTLS-style
   library)
+- A raw UDP or KCP/QUIC *carrier* (as opposed to forwarding UDP traffic
+  *through* the existing TCP/TCPMux carrier, which `[[ports]]`'s `udp = true`
+  already does) — researched against `rathole`/`frp`, deliberately deferred
+  as a large, separate undertaking rather than rushed in; see docs/TUNING.md
+- A full Layer-3/IP tunnel (BackPack's GRE-in-Noise mode) or multi-socket
+  bandwidth bonding — `direction = "direct"` covers the TCP-level "the
+  server's inbound doesn't get through" case without the much larger scope
+  of a second network stack
 - Per-connection bandwidth/rate limiting
 - A metrics dashboard beyond the periodic stats log line
+- ACME/Let's Encrypt automation, a Telegram bot, or a web panel — this stays
+  a single CLI binary with one config format
 - Pushing a config change to the peer automatically (the editor tells you
   when a change needs the same edit on the other side — it doesn't reach
   across and make it, on purpose; see docs/CENSORSHIP.md)

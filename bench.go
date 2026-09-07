@@ -431,6 +431,7 @@ func localRAMMB() (int, bool) {
 
 type tierPreset struct {
 	name                                         string
+	blurb                                        string // one-line "when to pick this" shown in the wizard
 	minIdle, maxIdle, maxStreamsPerSession       int
 	bufferSize, recvBuf, sendBuf                 int
 	muxRecvBuffer, muxStreamBuffer, muxFrameSize int
@@ -444,23 +445,33 @@ type tierPreset struct {
 // the wrong reason: the control channel still connects fine (it isn't
 // smux), so it looks up, while every mux session silently fails to open —
 // see docs/TUNING.md and config.go's validate().
+//
+// heavy -> insane used to be a single jump (4x the socket buffers, 2x
+// everything else) with nothing in between, and both were sized as if a big
+// dedicated box was the exception rather than the point of picking either
+// one. "extreme" fills that gap, and insane itself was raised further — a
+// box with cores and RAM to spare gets no benefit from a tier that's still
+// leaving that capacity idle.
 var tiers = []tierPreset{
-	{"light", 2, 6, 16, 16 * 1024, 65536, 65536, 1 << 20, 256 << 10, 16 << 10},
-	{"medium", 4, 16, 64, 32 * 1024, 256 << 10, 256 << 10, 4 << 20, 1 << 20, 32 << 10},
-	{"heavy", 8, 32, 128, 64 * 1024, 1 << 20, 1 << 20, 8 << 20, 2 << 20, 65535},
-	{"insane", 16, 64, 256, 128 * 1024, 4 << 20, 4 << 20, 16 << 20, 4 << 20, 65535},
+	{"light", "a small VPS, or a lot of concurrent low-bandwidth users", 2, 6, 16, 16 * 1024, 65536, 65536, 1 << 20, 256 << 10, 16 << 10},
+	{"medium", "a typical 2-4 core VPS, moderate traffic", 4, 16, 64, 32 * 1024, 256 << 10, 256 << 10, 4 << 20, 1 << 20, 32 << 10},
+	{"heavy", "4-8 cores, sustained high throughput", 8, 32, 128, 64 * 1024, 1 << 20, 1 << 20, 8 << 20, 2 << 20, 65535},
+	{"extreme", "8-16 cores, a fast dedicated link, capacity to spare", 12, 48, 192, 96 * 1024, 2 << 20, 2 << 20, 12 << 20, 3 << 20, 65535},
+	{"insane", "16+ cores on a beefy dedicated box — the link is the only limit left", 20, 80, 320, 192 * 1024, 6 << 20, 6 << 20, 24 << 20, 6 << 20, 65535},
 }
 
 func pickTier(cores, ramMB int, minMbps float64) tierPreset {
 	switch {
+	case cores >= 16 && minMbps >= 800:
+		return tiers[4] // insane
 	case cores >= 8 && minMbps >= 500:
-		return tiers[3]
+		return tiers[3] // extreme
 	case cores >= 4 && minMbps >= 100:
-		return tiers[2]
+		return tiers[2] // heavy
 	case cores >= 2 && minMbps >= 20:
-		return tiers[1]
+		return tiers[1] // medium
 	default:
-		return tiers[0]
+		return tiers[0] // light
 	}
 }
 

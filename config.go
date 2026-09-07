@@ -42,6 +42,14 @@ type DisguiseConfig struct {
 	ListenAddr string `toml:"listen_addr"` // server
 	ServerAddr string `toml:"server_addr"` // client
 
+	// BackupAddrs are additional addresses for this same disguise type,
+	// tried in order if ServerAddr stops working — for when the box being
+	// dialed has more than one public IP/domain and one of them gets
+	// blocked or goes down. Meaningless on the listening side (there's
+	// nothing to fail over when you're the one being dialed). See
+	// profiles.go's addr()/rotateAddr().
+	BackupAddrs []string `toml:"backup_addrs"`
+
 	// wss-only
 	Domain    string `toml:"domain"`    // sent as SNI / Host; also the self-signed cert's CN
 	Path      string `toml:"path"`      // the one path that upgrades to the tunnel
@@ -57,6 +65,23 @@ type Config struct {
 	// Role is set by the CLI flag, not the file, but kept here so the rest of
 	// the program can treat it like any other setting.
 	Role string `toml:"-"`
+
+	// Direction picks who dials whom for the tunnel's control channel and
+	// pool/mux capacity — independent of Role, which is unchanged and still
+	// decides who owns [[ports]] (always "server") versus who resolves and
+	// dials the real backend (always "client"):
+	//
+	//   - "reverse" (default): the box holding the real service ("client")
+	//     dials out to the box exposing ports to users ("server") — the
+	//     usual setup, and what to try first.
+	//   - "direct": the roles of *who dials* flip. The "server" now dials
+	//     out to the "client", which listens instead — use this when the
+	//     server box's inbound port doesn't get through (blocked, behind
+	//     NAT without a forward, etc.) but its outbound does. "server"
+	//     still exposes [[ports]] to users and "client" still resolves the
+	//     backend target; only the direction of the underlying connection
+	//     changes. See direct.go and dialsOut() below.
+	Direction string `toml:"direction"`
 
 	// Mode picks the transport: "tcp" (one pool connection carries exactly one
 	// forwarded flow, then is discarded) or "tcpmux" (a handful of long-lived
@@ -177,9 +202,19 @@ func LoadConfig(path, role string) (*Config, error) {
 	return cfg, nil
 }
 
+// dialsOut reports whether this role, under this Direction, is the side
+// that actively dials out to establish the control channel and pool/mux
+// capacity (true), or the side that passively listens for it (false). See
+// the Direction field's doc comment for the full picture; direct.go is
+// where this actually changes behavior.
+func (c *Config) dialsOut() bool {
+	return (c.Role == "server") == (c.Direction == "direct")
+}
+
 func defaultConfig() *Config {
 	return &Config{
 		Mode:                 "tcpmux",
+		Direction:            "reverse",
 		Heartbeat:            Duration{5 * time.Second},
 		RetryMin:             Duration{1 * time.Second},
 		RetryMax:             Duration{30 * time.Second},
@@ -204,6 +239,9 @@ func (c *Config) validate() error {
 	if c.Mode != "tcp" && c.Mode != "tcpmux" {
 		return fmt.Errorf("mode must be \"tcp\" or \"tcpmux\", got %q", c.Mode)
 	}
+	if c.Direction != "reverse" && c.Direction != "direct" {
+		return fmt.Errorf("direction must be \"reverse\" or \"direct\", got %q", c.Direction)
+	}
 	if c.Token == "" {
 		return fmt.Errorf("token must not be empty")
 	}
@@ -227,14 +265,16 @@ func (c *Config) validate() error {
 		default:
 			return fmt.Errorf("disguise[%d]: type must be \"plain\", \"noise\" or \"wss\", got %q", i, d.Type)
 		}
-		switch c.Role {
-		case "server":
-			if d.ListenAddr == "" {
-				return fmt.Errorf("disguise[%d] (%s): listen_addr is required", i, d.Type)
-			}
-		case "client":
+		// Which field is required tracks who actually listens vs. dials —
+		// not raw Role, which under Direction "direct" has the "server"
+		// role dialing out and the "client" role listening. See dialsOut().
+		if c.dialsOut() {
 			if d.ServerAddr == "" {
 				return fmt.Errorf("disguise[%d] (%s): server_addr is required", i, d.Type)
+			}
+		} else {
+			if d.ListenAddr == "" {
+				return fmt.Errorf("disguise[%d] (%s): listen_addr is required", i, d.Type)
 			}
 		}
 	}

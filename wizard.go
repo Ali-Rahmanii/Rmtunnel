@@ -22,20 +22,42 @@ func genToken() string {
 // disguiseAnswer is what the wizard collects for one [[disguise]] entry
 // before it's rendered to TOML.
 type disguiseAnswer struct {
-	Type     string
-	Addr     string // listen_addr (server) or server_addr (client)
-	Domain   string
-	Path     string
-	CertFile string
-	KeyFile  string
-	Insecure bool
+	Type        string
+	Addr        string // listen_addr (server) or server_addr (client)
+	BackupAddrs []string
+	Domain      string
+	Path        string
+	CertFile    string
+	KeyFile     string
+	Insecure    bool
+}
+
+// askBackupAddrs offers extra addresses for the same disguise, tried in
+// order if the primary one stops working (config.go's BackupAddrs) — only
+// meaningful on the dialing side, since there's nothing to fail over to on
+// the side being dialed.
+func askBackupAddrs() []string {
+	raw := readLineDefault("    backup addresses if this one stops working, comma-separated (blank = none)", "")
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func wizardServer() {
 	sectionHeader("Build Iran Tunnel (Server)")
 
 	fmt.Println(dim("This wizard builds the server config. The ports you open here"))
-	fmt.Println(dim("are what end users actually connect to."))
+	fmt.Println(dim("are what end users actually connect to — that's true either direction."))
+	fmt.Println()
+
+	direction := askDirection()
 	fmt.Println()
 
 	name := askTunnelName("server")
@@ -49,22 +71,26 @@ func wizardServer() {
 	fmt.Println(yellow("⚠ put this exact token in the client (Kharej) config too."))
 	fmt.Println()
 
-	mode := "tcpmux"
-	if !confirm("Use tcpmux mode (multiplexed, recommended)?", true) {
-		mode = "tcp"
-	}
+	mode := askTransportMode()
 	fmt.Println()
 
-	disguises := askDisguises(true)
+	// Reverse: server listens (Kharej dials in). Direct: server dials out
+	// to Kharej instead — see Config.Direction in config.go.
+	listens := direction != "direct"
+	disguises := askDisguises(listens, "Kharej box")
 	fmt.Println()
 
 	ports := askPorts()
 	fmt.Println()
 
-	kharejHost := readLineDefault("Kharej box's address (optional, only used to offer a live benchmark next)", "")
+	benchHost := ""
+	if !listens {
+		benchHost = hostOnly(disguises[0].Addr)
+	}
+	kharejHost := readLineDefault("Kharej box's address (optional, only used to offer a live benchmark next)", benchHost)
 	tier := askTierPreset(kharejHost)
 
-	toml := renderServerTOML(token, mode, disguises, ports, tier)
+	toml := renderServerTOML(direction, token, mode, disguises, ports, tier)
 	finishWizard("server", name, toml)
 }
 
@@ -73,6 +99,9 @@ func wizardClient() {
 
 	fmt.Println(dim("This is the box the real backend (X-UI, a panel, WireGuard, ...) runs on"))
 	fmt.Println(dim("or can reach."))
+	fmt.Println()
+
+	direction := askDirection()
 	fmt.Println()
 
 	name := askTunnelName("client")
@@ -85,19 +114,60 @@ func wizardClient() {
 	}
 	fmt.Println()
 
-	mode := "tcpmux"
-	if !confirm("Use tcpmux mode (must match the server)?", true) {
-		mode = "tcp"
+	mode := askTransportMode()
+	fmt.Println()
+
+	// Reverse: client dials out to Iran (the usual setup). Direct: client
+	// listens instead, and Iran dials it — see Config.Direction in config.go.
+	listens := direction == "direct"
+	disguises := askDisguises(listens, "Iran server")
+	fmt.Println()
+
+	benchHost := ""
+	if !listens {
+		benchHost = hostOnly(disguises[0].Addr)
 	}
-	fmt.Println()
+	tier := askTierPreset(benchHost)
 
-	disguises := askDisguises(false)
-	fmt.Println()
-
-	tier := askTierPreset(hostOnly(disguises[0].Addr))
-
-	toml := renderClientTOML(token, mode, disguises, tier)
+	toml := renderClientTOML(direction, token, mode, disguises, tier)
 	finishWizard("client", name, toml)
+}
+
+// askDirection asks who dials whom for the tunnel's own control channel and
+// pool/mux capacity. This is independent of which box exposes ports to
+// users — that's always the "Iran"/server side regardless of the answer
+// here. See Config.Direction's doc comment in config.go for the full
+// picture; direct.go is where the "direct" answer actually changes runtime
+// behavior.
+func askDirection() string {
+	fmt.Println(bold(magenta("Direction")))
+	fmt.Println(dim("Which box dials the other one to set the tunnel up — not which box"))
+	fmt.Println(dim("end users connect to (that's always Iran, either way)."))
+	fmt.Println()
+	fmt.Println(menuItem("1", bold("Reverse")+dim(" (default)")+" — Kharej dials Iran. Try this first."))
+	fmt.Println(menuItem("2", bold("Direct")+" — Iran dials Kharej instead. Use this if Iran's inbound"))
+	fmt.Println("           port doesn't get through but its outbound does.")
+	if readLineDefault("choice", "1") == "2" {
+		return "direct"
+	}
+	return "reverse"
+}
+
+// askTransportMode is the "which TCP variant" question — both ends must
+// agree, since nothing on the wire negotiates it (see Config.Mode's doc
+// comment in config.go). A raw UDP or QUIC/KCP carrier isn't implemented
+// here yet; forwarding UDP traffic *through* whichever of these two is
+// chosen is a separate, already-supported yes/no in askPorts below.
+func askTransportMode() string {
+	fmt.Println(bold(magenta("Transport")))
+	fmt.Println(dim("Both ends must use the same one — there's no negotiation on the wire."))
+	fmt.Println()
+	fmt.Println(menuItem("1", "TCP — one connection per session, simplest, lowest overhead"))
+	fmt.Println(menuItem("2", bold("TCP Mux")+dim(" (default)")+" — many sessions multiplexed over a few connections, better under concurrent load"))
+	if readLineDefault("choice", "2") == "1" {
+		return "tcp"
+	}
+	return "tcpmux"
 }
 
 // askTunnelName asks for a short identifier used to name this tunnel's
@@ -119,11 +189,13 @@ func askTunnelName(role string) string {
 }
 
 // askDisguises walks through the three disguise types, asking which are
-// enabled and, for wss, its extra fields. isServer decides whether it asks
-// for listen_addr or server_addr.
-func askDisguises(isServer bool) []disguiseAnswer {
-	fmt.Println(bold("Which anti-filtering methods should be enabled?"))
-	fmt.Println(dim("Recommended: enable all three — the client switches between them on its own."))
+// enabled and, for wss, its extra fields. listens decides whether it asks
+// for a listen_addr (this box) or a server_addr (peerLabel, the box being
+// dialed) — which no longer tracks Role directly once Direction "direct" is
+// in play, see wizardServer/wizardClient.
+func askDisguises(listens bool, peerLabel string) []disguiseAnswer {
+	fmt.Println(bold(magenta("Which anti-filtering methods should be enabled?")))
+	fmt.Println(dim("Recommended: enable all three — the dialing side switches between them on its own."))
 	fmt.Println(dim("Full explanation of each: docs/CENSORSHIP.md"))
 	fmt.Println()
 
@@ -131,7 +203,7 @@ func askDisguises(isServer bool) []disguiseAnswer {
 
 	if confirm("  wss (TLS+WebSocket, looks like an ordinary HTTPS site — strongest)", true) {
 		d := disguiseAnswer{Type: "wss", Path: "/ws"}
-		if isServer {
+		if listens {
 			port := readLineDefault("    wss listen port", "443")
 			d.Addr = "0.0.0.0:" + port
 			d.Domain = readLineDefault("    domain (enter it if you have a real cert, else leave blank)", "")
@@ -140,44 +212,47 @@ func askDisguises(isServer bool) []disguiseAnswer {
 				d.KeyFile = readLineDefault("    key file path", "")
 			}
 		} else {
-			ip := readLine("    Iran server's public address: ")
-			port := readLineDefault("    server's wss port", "443")
+			ip := readLine("    " + peerLabel + "'s public address: ")
+			port := readLineDefault("    its wss port", "443")
 			d.Addr = ip + ":" + port
-			d.Domain = readLineDefault("    domain (exactly what you set on the server, or blank)", "")
-			d.Insecure = confirm("    does the server use a self-signed cert?", true)
+			d.Domain = readLineDefault("    domain (exactly what you set on the listening side, or blank)", "")
+			d.Insecure = confirm("    does the listening side use a self-signed cert?", true)
+			d.BackupAddrs = askBackupAddrs()
 		}
 		out = append(out, d)
 	}
 
 	if confirm("  noise (encrypted, no fixed protocol signature)", true) {
 		d := disguiseAnswer{Type: "noise"}
-		if isServer {
+		if listens {
 			port := readLineDefault("    noise listen port", "9001")
 			d.Addr = "0.0.0.0:" + port
 		} else {
-			ip := readLine("    Iran server's public address: ")
-			port := readLineDefault("    server's noise port", "9001")
+			ip := readLine("    " + peerLabel + "'s public address: ")
+			port := readLineDefault("    its noise port", "9001")
 			d.Addr = ip + ":" + port
+			d.BackupAddrs = askBackupAddrs()
 		}
 		out = append(out, d)
 	}
 
 	if confirm("  plain (raw, fastest but easiest to fingerprint)", true) {
 		d := disguiseAnswer{Type: "plain"}
-		if isServer {
+		if listens {
 			port := readLineDefault("    plain listen port", "9000")
 			d.Addr = "0.0.0.0:" + port
 		} else {
-			ip := readLine("    Iran server's public address: ")
-			port := readLineDefault("    server's plain port", "9000")
+			ip := readLine("    " + peerLabel + "'s public address: ")
+			port := readLineDefault("    its plain port", "9000")
 			d.Addr = ip + ":" + port
+			d.BackupAddrs = askBackupAddrs()
 		}
 		out = append(out, d)
 	}
 
 	for len(out) == 0 {
 		fmt.Println(red("you need to enable at least one."))
-		out = askDisguises(isServer)
+		out = askDisguises(listens, peerLabel)
 	}
 	return out
 }
@@ -190,7 +265,7 @@ func askDisguises(isServer bool) []disguiseAnswer {
 // address (the client wizard already knows the server's address; the server
 // wizard doesn't know the Kharej box's, so it's asked for there instead).
 func askTierPreset(suggestedHost string) tierPreset {
-	fmt.Println(bold("Performance sizing"))
+	fmt.Println(bold(magenta("Performance sizing")))
 	fmt.Println(dim("The single biggest factor is the link's bandwidth-delay product — a buffer"))
 	fmt.Println(dim("smaller than bandwidth×RTT caps a single connection's speed no matter how"))
 	fmt.Println(dim("fast the link actually is. Measuring beats guessing."))
@@ -209,22 +284,24 @@ func askTierPreset(suggestedHost string) tierPreset {
 	}
 }
 
+// defaultTierIndex is "medium" — the safe pick for an unknown box, and what
+// an empty answer to the picker below falls back to.
+const defaultTierIndex = 1
+
 func askStaticTier() tierPreset {
 	fmt.Println()
-	fmt.Println(menuItem("1", tiers[0].name+" — a small VPS, or a lot of concurrent low-bandwidth users"))
-	fmt.Println(menuItem("2", tiers[1].name+" (default) — a typical 2-4 core VPS, moderate traffic"))
-	fmt.Println(menuItem("3", tiers[2].name+" — 4-8 cores, sustained high throughput"))
-	fmt.Println(menuItem("4", tiers[3].name+" — 8+ cores, a fast dedicated link"))
-	switch readLineDefault("choice", "2") {
-	case "1":
-		return tiers[0]
-	case "3":
-		return tiers[2]
-	case "4":
-		return tiers[3]
-	default:
-		return tiers[1]
+	for i, t := range tiers {
+		label := bold(t.name)
+		if i == defaultTierIndex {
+			label += dim(" (default)")
+		}
+		fmt.Println(menuItem(fmt.Sprint(i+1), label+" — "+t.blurb))
 	}
+	choice := readLineDefault("choice", fmt.Sprint(defaultTierIndex+1))
+	if idx := indexFromChoice(choice, len(tiers)); idx >= 0 {
+		return tiers[idx]
+	}
+	return tiers[defaultTierIndex]
 }
 
 func askLiveBenchTier(suggestedHost string) tierPreset {
@@ -283,20 +360,33 @@ func hostOnly(addr string) string {
 	return host
 }
 
-func renderDisguiseBlock(d disguiseAnswer, isServer bool) string {
+// quotedList renders ["a", "b"]'s inside — the part between the brackets —
+// for a TOML string array.
+func quotedList(items []string) string {
+	quoted := make([]string, len(items))
+	for i, s := range items {
+		quoted[i] = fmt.Sprintf("%q", s)
+	}
+	return strings.Join(quoted, ", ")
+}
+
+func renderDisguiseBlock(d disguiseAnswer, listens bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[[disguise]]\n")
 	fmt.Fprintf(&b, "type = %q\n", d.Type)
 	fmt.Fprintf(&b, "enabled = true\n")
-	if isServer {
+	if listens {
 		fmt.Fprintf(&b, "listen_addr = %q\n", d.Addr)
 	} else {
 		fmt.Fprintf(&b, "server_addr = %q\n", d.Addr)
+		if len(d.BackupAddrs) > 0 {
+			fmt.Fprintf(&b, "backup_addrs = [%s]\n", quotedList(d.BackupAddrs))
+		}
 	}
 	if d.Type == "wss" {
 		fmt.Fprintf(&b, "domain = %q\n", d.Domain)
 		fmt.Fprintf(&b, "path = %q\n", "/ws")
-		if isServer {
+		if listens {
 			fmt.Fprintf(&b, "cert_file = %q\n", d.CertFile)
 			fmt.Fprintf(&b, "key_file = %q\n", d.KeyFile)
 		} else {
@@ -315,14 +405,15 @@ func renderDisguiseBlock(d disguiseAnswer, isServer bool) string {
 // that on the way back in, but the fix is to never write it that way. See
 // the matching comment on Config's own field order in config.go.
 
-func renderServerTOML(token, mode string, disguises []disguiseAnswer, ports []PortMap, tier tierPreset) string {
+func renderServerTOML(direction, token, mode string, disguises []disguiseAnswer, ports []PortMap, tier tierPreset) string {
+	listens := direction != "direct"
 	var b strings.Builder
 	fmt.Fprintf(&b, "# generated by the rmtunnel wizard — %s\n\n", RepoURL)
-	fmt.Fprintf(&b, "mode = %q\ntoken = %q\n\n", mode, token)
+	fmt.Fprintf(&b, "mode = %q\ndirection = %q\ntoken = %q\n\n", mode, direction, token)
 	b.WriteString(renderTuningBlock(tier))
 	b.WriteString("\n")
 	for _, d := range disguises {
-		b.WriteString(renderDisguiseBlock(d, true))
+		b.WriteString(renderDisguiseBlock(d, listens))
 		b.WriteString("\n")
 	}
 	for _, p := range ports {
@@ -331,15 +422,16 @@ func renderServerTOML(token, mode string, disguises []disguiseAnswer, ports []Po
 	return b.String()
 }
 
-func renderClientTOML(token, mode string, disguises []disguiseAnswer, tier tierPreset) string {
+func renderClientTOML(direction, token, mode string, disguises []disguiseAnswer, tier tierPreset) string {
+	listens := direction == "direct"
 	var b strings.Builder
 	fmt.Fprintf(&b, "# generated by the rmtunnel wizard — %s\n\n", RepoURL)
-	fmt.Fprintf(&b, "mode = %q\ntoken = %q\n\n", mode, token)
+	fmt.Fprintf(&b, "mode = %q\ndirection = %q\ntoken = %q\n\n", mode, direction, token)
 	fmt.Fprintf(&b, "retry_min = \"1s\"\nretry_max = \"30s\"\n")
 	b.WriteString(renderTuningBlock(tier))
 	b.WriteString("\n")
 	for _, d := range disguises {
-		b.WriteString(renderDisguiseBlock(d, false))
+		b.WriteString(renderDisguiseBlock(d, listens))
 		b.WriteString("\n")
 	}
 	return b.String()
