@@ -208,32 +208,46 @@ func tunnelActionMenu(t tunnelRef) {
 		fmt.Println(menuItem("4", "Restart"))
 		fmt.Println(menuItem("5", "View logs"))
 		fmt.Println(menuItem("6", "Delete"))
+		extraOpt := 7
+		switch {
+		case t.Role == "paqet-server":
+			fmt.Println(menuItem(fmt.Sprint(extraOpt), "Reapply iptables rules "+dim("(NOTRACK — see paqet's README)")))
+		case t.Role == "paqet-client":
+			fmt.Println(menuItem(fmt.Sprint(extraOpt), "Test connection "+dim("(paqet ping)")))
+		default:
+			extraOpt = -1
+		}
 		fmt.Println(menuItem("0", "back"))
 
-		switch readLine("choice: ") {
-		case "1":
+		choice := readLine("choice: ")
+		switch {
+		case choice == "1":
 			editTunnel(t)
-		case "2":
+		case choice == "2":
 			run("systemctl", "start", t.unit())
 			fmt.Println(green("started."))
 			pressEnter()
-		case "3":
+		case choice == "3":
 			run("systemctl", "stop", t.unit())
 			fmt.Println(green("stopped."))
 			pressEnter()
-		case "4":
+		case choice == "4":
 			run("systemctl", "restart", t.unit())
 			fmt.Println(green("restarted."))
 			pressEnter()
-		case "5":
+		case choice == "5":
 			out, _ := run("journalctl", "-u", t.unit(), "-n", "60", "--no-pager")
 			fmt.Println(out)
 			pressEnter()
-		case "6":
+		case choice == "6":
 			if deleteTunnel(t) {
 				return
 			}
-		case "0", "":
+		case extraOpt > 0 && choice == fmt.Sprint(extraOpt) && t.Role == "paqet-server":
+			reapplyPaqetIPTables(t)
+		case extraOpt > 0 && choice == fmt.Sprint(extraOpt) && t.Role == "paqet-client":
+			testPaqetConnection(t)
+		case choice == "0" || choice == "":
 			return
 		default:
 			fmt.Println(red("invalid choice."))
@@ -255,6 +269,14 @@ func editTunnel(t tunnelRef) {
 		editPaqetTunnel(t)
 		return
 	}
+	// Wrapped in runWizard because the sub-flows this can enter (change
+	// disguises, change performance tier) accept "0" as cancel too — without
+	// this, that "0" would panic straight through to the main menu loop
+	// instead of just backing out of this edit.
+	runWizard(func() { editTunnelBody(t) })
+}
+
+func editTunnelBody(t tunnelRef) {
 	sectionHeader("Edit: " + t.Name + " (" + t.Role + ")")
 	cfg, err := LoadConfig(t.Path, t.Role)
 	if err != nil {

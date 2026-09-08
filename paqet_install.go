@@ -165,23 +165,55 @@ func detectNetwork() detectedNetwork {
 	return d
 }
 
-// applyPaqetIPTables applies the NOTRACK/RST-drop rules paqet's own README
-// says are required on the listening side, or the whole tunnel is prone to
-// random resets and drops under load — exactly the kind of "still not
-// stable under real traffic" symptom this round is about. port is the
-// paqet listen.addr port.
-func applyPaqetIPTables(port string) error {
-	rules := [][]string{
+// paqetIPTablesRules is the three rules paqet's own README says are
+// required on the listening side, in append (-A) form — without them, the
+// kernel's own RST packets on a port with no real listening socket destroy
+// the tunnel's state under real load, which reads as "just doesn't
+// connect" or "connects but is unstable" for a confusing reason. port is
+// the paqet listen.addr port. Index 2 of every entry is the "-A" — swapped
+// for "-C" by callers that only want to check whether a rule is present.
+func paqetIPTablesRules(port string) [][]string {
+	return [][]string{
 		{"-t", "raw", "-A", "PREROUTING", "-p", "tcp", "--dport", port, "-j", "NOTRACK"},
 		{"-t", "raw", "-A", "OUTPUT", "-p", "tcp", "--sport", port, "-j", "NOTRACK"},
 		{"-t", "mangle", "-A", "OUTPUT", "-p", "tcp", "--sport", port, "--tcp-flags", "RST", "RST", "-j", "DROP"},
 	}
-	for _, args := range rules {
-		if _, err := exec.Command("iptables", args...).CombinedOutput(); err != nil {
-			return fmt.Errorf("iptables %s: %w", strings.Join(args, " "), err)
+}
+
+func paqetIPTableRuleExists(appendArgs []string) bool {
+	checkArgs := append([]string(nil), appendArgs...)
+	checkArgs[2] = "-C"
+	return exec.Command("iptables", checkArgs...).Run() == nil
+}
+
+// applyPaqetIPTables applies whichever of the three required rules aren't
+// already present — idempotent, so re-running it (e.g. from "Manage
+// tunnels" after a first attempt didn't take, or if it was applied once
+// already) doesn't pile up duplicate rules.
+func applyPaqetIPTables(port string) error {
+	for _, rule := range paqetIPTablesRules(port) {
+		if paqetIPTableRuleExists(rule) {
+			continue
+		}
+		if out, err := exec.Command("iptables", rule...).CombinedOutput(); err != nil {
+			return fmt.Errorf("iptables %s: %s: %w", strings.Join(rule, " "), strings.TrimSpace(string(out)), err)
 		}
 	}
 	return nil
+}
+
+// verifyPaqetIPTables reports whether all three required rules are
+// currently active — used right after applying, so a silent failure (e.g.
+// this system uses nftables without the legacy iptables compat binary,
+// which fails in a way that doesn't always surface as a clear error) shows
+// up as a clear ✖ instead of being trusted on a bare "no error" alone.
+func verifyPaqetIPTables(port string) bool {
+	for _, rule := range paqetIPTablesRules(port) {
+		if !paqetIPTableRuleExists(rule) {
+			return false
+		}
+	}
+	return true
 }
 
 // persistPaqetIPTables best-effort saves the rules just added so they

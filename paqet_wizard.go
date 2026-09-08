@@ -53,15 +53,47 @@ func askPaqetNetwork(listenPort string) (iface, ip, mac string) {
 	return iface, ip + ":" + listenPort, mac
 }
 
+// paqetForwardsFromPorts converts rmtunnel's own PortMap list into paqet's
+// forward entries. A PortMap with UDP set means "relay UDP too, in
+// ADDITION to TCP" (see udp.go) — paqet has no such combined entry, each
+// forward is one protocol — so that has to become TWO forward entries
+// (tcp and udp) on the same listen/target, not one replacing the other.
+// Emitting only udp when UDP was requested (an earlier bug here) silently
+// dropped TCP entirely.
+func paqetForwardsFromPorts(ports []PortMap) []paqetForward {
+	var out []paqetForward
+	for _, p := range ports {
+		out = append(out, paqetForward{Listen: p.Listen, Target: p.Target, Protocol: "tcp"})
+		if p.UDP {
+			out = append(out, paqetForward{Listen: p.Listen, Target: p.Target, Protocol: "udp"})
+		}
+	}
+	return out
+}
+
+// askPaqetLogLevel defaults to "info", not paqet's own "none" default —
+// "none" was this integration's original default (matching the reference
+// config it was built from), but it suppresses every diagnostic paqet would
+// otherwise print, which makes a first connection failure impossible to
+// debug from the logs. Once a tunnel is confirmed working, Edit can quiet
+// it back down.
+func askPaqetLogLevel() string {
+	return readLineDefault("log level (none, debug, info, warn, error, fatal)", "info")
+}
+
 // askPaqetKCP walks the transport.kcp block: a named preset (including the
 // "gaming" one matching the aggressive manual config this integration was
-// built against), or full manual entry.
-func askPaqetKCP(key string) paqetKCP {
+// built against), or full manual entry. mustMatchKey is true on the side
+// that joins an already-existing tunnel (Iran/client) — it has to enter the
+// same key the other side is using, not generate a fresh one; false on the
+// initiating side (Kharej/server), which is free to generate one.
+func askPaqetKCP(key string, mustMatchKey bool) paqetKCP {
 	fmt.Println(bold(magenta("KCP performance preset")))
 	for i, p := range paqetKCPPresets {
 		fmt.Println(menuItem(fmt.Sprint(i+1), bold(p.name)+" — "+p.blurb))
 	}
-	choice := readLineDefault("choice", "1")
+	fmt.Println(menuItem("0", "cancel"))
+	choice := askChoice("choice", "1")
 	idx := indexFromChoice(choice, len(paqetKCPPresets))
 	if idx < 0 {
 		idx = 0
@@ -72,7 +104,7 @@ func askPaqetKCP(key string) paqetKCP {
 	if preset.apply != nil {
 		preset.apply(&k)
 		fmt.Println()
-		return askPaqetBlock(k)
+		return askPaqetBlock(k, mustMatchKey)
 	}
 
 	// custom manual
@@ -95,19 +127,32 @@ func askPaqetKCP(key string) paqetKCP {
 	k.Smuxbuf = parseIntDefault(readLineDefault("smux receive buffer (bytes)", "4194304"), 4194304)
 	k.Streambuf = parseIntDefault(readLineDefault("per-stream buffer (bytes)", "2097152"), 2097152)
 	fmt.Println()
-	return askPaqetBlock(k)
+	return askPaqetBlock(k, mustMatchKey)
 }
 
-func askPaqetBlock(k paqetKCP) paqetKCP {
+func askPaqetBlock(k paqetKCP, mustMatchKey bool) paqetKCP {
 	fmt.Println(bold(magenta("Encryption")))
 	fmt.Println(dim("aes is the safe default. \"none\"/\"null\" disable authentication — anyone"))
 	fmt.Println(dim("with your server's IP and port could connect. See paqet's README."))
 	k.Block = readLineDefault("encryption block (aes, aes-128-gcm, xor, none, null, ...)", "aes")
-	if k.Block != "none" && k.Block != "null" && k.Key == "" {
+
+	noAuth := k.Block == "none" || k.Block == "null"
+	switch {
+	case mustMatchKey && !noAuth:
+		// Joining an existing tunnel: a freshly generated key here would
+		// simply not match what Kharej is already running, and the two
+		// sides would never authenticate — this is exactly the bug an
+		// earlier version of this wizard had (it silently generated a new
+		// key on both sides instead of asking Iran to enter Kharej's).
+		k.Key = ""
+		for k.Key == "" {
+			k.Key = readLine("encryption key (must match Kharej's exactly): ")
+		}
+	case !noAuth && k.Key == "":
 		k.Key = genToken()
 		fmt.Println(green("key generated: ") + bold(k.Key))
+		fmt.Println(yellow("⚠ enter this exact key on the Iran side too."))
 	}
-	fmt.Println(yellow("⚠ this exact key must match on both sides."))
 	return k
 }
 
@@ -126,15 +171,15 @@ func wizardPaqetKharej(name string) {
 	iface, addr, mac := askPaqetNetwork(port)
 	fmt.Println()
 
-	key := ""
-	kcp := askPaqetKCP(key)
+	kcp := askPaqetKCP("", false)
 	fmt.Println()
 
 	conn := parseIntDefault(readLineDefault("number of underlying connections (1-256)", "1"), 1)
+	logLevel := askPaqetLogLevel()
 
 	c := &paqetConf{
 		Role:   "server",
-		Log:    paqetLog{Level: "none"},
+		Log:    paqetLog{Level: logLevel},
 		Listen: &paqetListen{Addr: ":" + port},
 		Network: paqetNetwork{
 			Interface: iface,
@@ -175,19 +220,13 @@ func wizardPaqetIran(name string) {
 	iface, addr, mac := askPaqetNetwork(listenPort)
 	fmt.Println()
 
-	key := ""
-	kcp := askPaqetKCP(key)
+	// mustMatchKey=true: this side is joining a tunnel Kharej already
+	// created — it needs Kharej's exact key, not a freshly generated one.
+	kcp := askPaqetKCP("", true)
 	fmt.Println()
 
 	ports := askPorts()
-	var forwards []paqetForward
-	for _, p := range ports {
-		proto := "tcp"
-		if p.UDP {
-			proto = "udp"
-		}
-		forwards = append(forwards, paqetForward{Listen: p.Listen, Target: p.Target, Protocol: proto})
-	}
+	forwards := paqetForwardsFromPorts(ports)
 	fmt.Println()
 
 	var socks5 []paqetSocks5
@@ -199,10 +238,11 @@ func wizardPaqetIran(name string) {
 		}
 		socks5 = append(socks5, s)
 	}
+	logLevel := askPaqetLogLevel()
 
 	c := &paqetConf{
 		Role:    "client",
-		Log:     paqetLog{Level: "none"},
+		Log:     paqetLog{Level: logLevel},
 		SOCKS5:  socks5,
 		Forward: forwards,
 		Network: paqetNetwork{
@@ -217,11 +257,103 @@ func wizardPaqetIran(name string) {
 	finishPaqetWizard("paqet-client", name, c, "")
 }
 
+// reapplyPaqetIPTables re-runs (idempotently — see applyPaqetIPTables) the
+// NOTRACK/RST-drop rules for a paqet-server tunnel, for when the wizard's
+// own attempt at setup time failed or was skipped. Available from "Manage
+// tunnels" so fixing this doesn't require rebuilding the tunnel.
+func reapplyPaqetIPTables(t tunnelRef) {
+	sectionHeader("Reapply iptables rules: " + t.Name)
+	c, err := loadPaqetConf(t.Path)
+	if err != nil {
+		fmt.Println(red("failed to read this tunnel's config: " + err.Error()))
+		pressEnter()
+		return
+	}
+	if c.Listen == nil || c.Listen.Addr == "" {
+		fmt.Println(red("this config has no listen address to apply rules for."))
+		pressEnter()
+		return
+	}
+	port := portOf(c.Listen.Addr)
+	fmt.Println(dim("applying NOTRACK/RST-drop rules for port " + port + "..."))
+	if err := applyPaqetIPTables(port); err != nil {
+		fmt.Println(red("failed: " + err.Error()))
+	} else if verifyPaqetIPTables(port) {
+		fmt.Println(green("✔ applied and confirmed active."))
+		persistPaqetIPTables()
+	} else {
+		fmt.Println(red("✖ iptables reported success but the rules aren't showing as active —"))
+		fmt.Println(red("  this system may use nftables without iptables-legacy; apply them by hand."))
+	}
+	pressEnter()
+}
+
+// testPaqetConnection runs paqet's own connectivity probe (paqet ping) for
+// a paqet-client tunnel — the tool its own docs point to first when
+// troubleshooting ("Use paqet ping -c config.yaml to test the connection").
+func testPaqetConnection(t tunnelRef) {
+	sectionHeader("Test connection: " + t.Name)
+	if !paqetInstalled() {
+		fmt.Println(red("paqet isn't installed at " + paqetBinPath + "."))
+		pressEnter()
+		return
+	}
+	fmt.Println(dim(paqetBinPath + " ping -c " + t.Path))
+	fmt.Println()
+	out, err := run(paqetBinPath, "ping", "-c", t.Path)
+	fmt.Println(out)
+	if err != nil {
+		fmt.Println(red("ping failed: " + err.Error()))
+		fmt.Println(dim("also try \"paqet dump -p <port>\" on the Kharej box to see if packets are arriving at all."))
+	} else {
+		fmt.Println(green("reachable."))
+	}
+	pressEnter()
+}
+
+// printPaqetSettings shows everything about a paqet tunnel worth seeing at
+// a glance — not just the couple of fields most likely to be edited.
+func printPaqetSettings(c *paqetConf) {
+	fmt.Println(bold(magenta("current settings:")))
+	fmt.Printf("  role: %s   log level: %s\n", c.Role, c.Log.Level)
+	fmt.Printf("  network: interface=%s  ip=%s  gateway_mac=%s\n", c.Network.Interface, c.Network.IPv4.Addr, c.Network.IPv4.RouterMAC)
+	fmt.Printf("  transport: protocol=%s  connections=%d\n", c.Transport.Protocol, c.Transport.Conn)
+	k := c.Transport.KCP
+	fmt.Printf("  kcp: mode=%s  block=%s  mtu=%d  rcvwnd=%d  sndwnd=%d\n", k.Mode, k.Block, k.MTU, k.Rcvwnd, k.Sndwnd)
+	fmt.Printf("       smuxbuf=%d  streambuf=%d", k.Smuxbuf, k.Streambuf)
+	if k.Dshard > 0 {
+		fmt.Printf("  fec=%d/%d", k.Dshard, k.Pshard)
+	}
+	fmt.Println()
+	if c.Role == "client" {
+		fmt.Printf("  dials: %s\n", c.Server.Addr)
+		for _, f := range c.Forward {
+			fmt.Printf("  forward: %s -> %s (%s)\n", f.Listen, f.Target, f.Protocol)
+		}
+		for _, s := range c.SOCKS5 {
+			auth := "no auth"
+			if s.Username != "" {
+				auth = "user " + s.Username
+			}
+			fmt.Printf("  socks5: %s (%s)\n", s.Listen, auth)
+		}
+	} else {
+		fmt.Printf("  listen: %s\n", c.Listen.Addr)
+	}
+}
+
 // editPaqetTunnel is editTunnel's paqet-shaped counterpart — same idea
 // (show current settings, change one thing, save, offer a restart), scaled
 // to what actually needs changing often: forwarded ports (Iran/client side)
 // and the KCP performance preset (either side, but both sides must match).
 func editPaqetTunnel(t tunnelRef) {
+	// Wrapped because the "change KCP preset" sub-flow accepts "0" as
+	// cancel too — without this, that "0" would panic past this function
+	// instead of just backing out of the edit. See tunnels.go's editTunnel.
+	runWizard(func() { editPaqetTunnelBody(t) })
+}
+
+func editPaqetTunnelBody(t tunnelRef) {
 	sectionHeader("Edit: " + t.Name + " (" + t.Role + ")")
 	c, err := loadPaqetConf(t.Path)
 	if err != nil {
@@ -230,19 +362,7 @@ func editPaqetTunnel(t tunnelRef) {
 		return
 	}
 
-	fmt.Println(bold(magenta("current settings:")))
-	fmt.Printf("  role: %s\n", c.Role)
-	fmt.Printf("  kcp mode: %s (block: %s)\n", c.Transport.KCP.Mode, c.Transport.KCP.Block)
-	if c.Role == "client" {
-		for _, f := range c.Forward {
-			fmt.Printf("  forward: %s -> %s (%s)\n", f.Listen, f.Target, f.Protocol)
-		}
-		for _, s := range c.SOCKS5 {
-			fmt.Printf("  socks5: %s\n", s.Listen)
-		}
-	} else {
-		fmt.Printf("  listen: %s\n", c.Listen.Addr)
-	}
+	printPaqetSettings(c)
 	fmt.Println()
 
 	fmt.Println(menuItem("1", "change encryption key "+yellow("(needs updating on the peer too)")))
@@ -255,6 +375,9 @@ func editPaqetTunnel(t tunnelRef) {
 	}
 	kcpOpt := nextOpt
 	fmt.Println(menuItem(fmt.Sprint(nextOpt), "change KCP preset "+yellow("(needs matching change on the peer)")))
+	nextOpt++
+	logOpt := nextOpt
+	fmt.Println(menuItem(fmt.Sprint(nextOpt), "change log level "+dim("(local only — \"info\" if you're debugging a connection issue)")))
 	fmt.Println(menuItem("0", "back (no changes)"))
 
 	choice := readLine("choice: ")
@@ -266,18 +389,14 @@ func editPaqetTunnel(t tunnelRef) {
 
 	case portsOpt > 0 && choice == fmt.Sprint(portsOpt):
 		ports := askPorts()
-		c.Forward = nil
-		for _, p := range ports {
-			proto := "tcp"
-			if p.UDP {
-				proto = "udp"
-			}
-			c.Forward = append(c.Forward, paqetForward{Listen: p.Listen, Target: p.Target, Protocol: proto})
-		}
+		c.Forward = paqetForwardsFromPorts(ports)
 
 	case choice == fmt.Sprint(kcpOpt):
-		c.Transport.KCP = askPaqetKCP(c.Transport.KCP.Key)
+		c.Transport.KCP = askPaqetKCP(c.Transport.KCP.Key, false)
 		fmt.Println(yellow("⚠ update the peer's KCP settings to match, or the tunnel will fail to connect."))
+
+	case choice == fmt.Sprint(logOpt):
+		c.Log.Level = askPaqetLogLevel()
 
 	default:
 		changed = false
@@ -357,9 +476,14 @@ func finishPaqetWizard(role, name string, c *paqetConf, iptablesPort string) {
 		if confirm("apply these now?", true) {
 			if err := applyPaqetIPTables(iptablesPort); err != nil {
 				fmt.Println(red("failed: " + err.Error()))
-			} else {
-				fmt.Println(green("applied."))
+			} else if verifyPaqetIPTables(iptablesPort) {
+				fmt.Println(green("✔ applied and confirmed active."))
 				persistPaqetIPTables()
+			} else {
+				fmt.Println(red("✖ iptables reported success but the rules aren't showing as active —"))
+				fmt.Println(red("  check whether this system uses nftables without iptables-legacy, and"))
+				fmt.Println(red("  apply them by hand if so. Retry from \"Manage tunnels\" → this tunnel →"))
+				fmt.Println(red("  \"Reapply iptables rules\" once fixed."))
 			}
 		}
 	}

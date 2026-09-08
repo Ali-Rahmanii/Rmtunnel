@@ -51,10 +51,15 @@ func askBackupAddrs() []string {
 }
 
 func wizardServer() {
+	runWizard(wizardServerBody)
+}
+
+func wizardServerBody() {
 	sectionHeader("Build Iran Tunnel (Server)")
 
 	fmt.Println(dim("This wizard builds the server config. The ports you open here"))
 	fmt.Println(dim("are what end users actually connect to — that's true either direction."))
+	fmt.Println(dim("Enter 0 at any numbered question to cancel and return to the main menu."))
 	fmt.Println()
 
 	direction := askDirection()
@@ -106,10 +111,15 @@ func wizardServer() {
 }
 
 func wizardClient() {
+	runWizard(wizardClientBody)
+}
+
+func wizardClientBody() {
 	sectionHeader("Build Kharej Tunnel (Client)")
 
 	fmt.Println(dim("This is the box the real backend (X-UI, a panel, WireGuard, ...) runs on"))
 	fmt.Println(dim("or can reach."))
+	fmt.Println(dim("Enter 0 at any numbered question to cancel and return to the main menu."))
 	fmt.Println()
 
 	direction := askDirection()
@@ -169,7 +179,8 @@ func askDirection() string {
 	fmt.Println(menuItem("1", bold("Reverse")+dim(" (default)")+" — Kharej dials Iran. Try this first."))
 	fmt.Println(menuItem("2", bold("Direct")+" — Iran dials Kharej instead. Use this if Iran's inbound"))
 	fmt.Println("           port doesn't get through but its outbound does.")
-	if readLineDefault("choice", "1") == "2" {
+	fmt.Println(menuItem("0", "cancel"))
+	if askChoice("choice", "1") == "2" {
 		return "direct"
 	}
 	return "reverse"
@@ -197,7 +208,8 @@ func askDirectEngine() string {
 	fmt.Println(menuItem("1", bold("rmtunnel")+dim(" (default)")+" — this project's own TCP/TCP Mux, dialing out"))
 	fmt.Println(menuItem("2", bold("paqet")+" — raw TCP packets + KCP, bypasses the kernel's own connection"))
 	fmt.Println("           tracking — needs root and libpcap on both boxes. github.com/hanselime/paqet")
-	if readLineDefault("choice", "1") == "2" {
+	fmt.Println(menuItem("0", "cancel"))
+	if askChoice("choice", "1") == "2" {
 		return "paqet"
 	}
 	return "rmtunnel"
@@ -209,15 +221,51 @@ func askDirectEngine() string {
 // here yet; forwarding UDP traffic *through* whichever of these two is
 // chosen is a separate, already-supported yes/no in askPorts below.
 func askTransportMode() string {
-	fmt.Println(bold(magenta("Transport")))
+	fmt.Println(bold(magenta("Transport family")))
 	fmt.Println(dim("Both ends must use the same one — there's no negotiation on the wire."))
 	fmt.Println()
+	fmt.Println(menuItem("1", bold("TCP")+dim(" (default)")+" — reliable, works everywhere"))
+	fmt.Println(menuItem("2", "UDP"+dim(" (preview)")+" — lower latency, better on lossy/throttled links"))
+	fmt.Println(menuItem("0", "cancel"))
+	if askChoice("choice", "1") == "2" {
+		askUDPFamilyPreview()
+	}
+	return askTCPVariant()
+}
+
+// askTCPVariant is the "which TCP variant" question — both ends must
+// agree, since nothing on the wire negotiates it (see Config.Mode's doc
+// comment in config.go). Forwarding UDP traffic *through* whichever of
+// these two is chosen is a separate, already-supported yes/no in askPorts
+// below — not the same thing as a UDP carrier (see askUDPFamilyPreview).
+func askTCPVariant() string {
+	fmt.Println()
+	fmt.Println(bold(magenta("TCP variant")))
 	fmt.Println(menuItem("1", "TCP — one connection per session, simplest, lowest overhead"))
 	fmt.Println(menuItem("2", bold("TCP Mux")+dim(" (default)")+" — many sessions multiplexed over a few connections, better under concurrent load"))
-	if readLineDefault("choice", "2") == "1" {
+	fmt.Println(menuItem("0", "cancel"))
+	if askChoice("choice", "2") == "1" {
 		return "tcp"
 	}
 	return "tcpmux"
+}
+
+// askUDPFamilyPreview shows the UDP carrier options BackPack itself offers
+// — a preview only, nothing here is runnable yet, so it always falls back
+// to picking a real TCP variant afterward. paqet (offered as a Direct-mode
+// engine choice) already covers the "raw/KCP, low-latency" need for real
+// use today; native UDP/KCP/QUIC transports are a larger, separate project
+// — see README.md and docs/TUNING.md for the reasoning.
+func askUDPFamilyPreview() {
+	fmt.Println()
+	fmt.Println(bold(magenta("UDP variant")) + dim(" — preview, not runnable yet"))
+	fmt.Println(menuItem("1", "UDP — raw datagrams, for UDP-based services"))
+	fmt.Println(menuItem("2", "UDP + KCP + FEC — low-latency gaming tunnel, reliable UDP with always-on error correction"))
+	fmt.Println(menuItem("3", "UDP + QUIC — encrypted TLS 1.3 streams over UDP, self-tuning, great under loss"))
+	fmt.Println()
+	readLine(dim("press Enter to go back and pick a TCP variant instead: "))
+	fmt.Println(yellow("⚠ UDP transport isn't runnable yet — for a working low-latency raw-packet/KCP tunnel today, pick paqet as the Direct-mode engine instead."))
+	pressEnter()
 }
 
 // askTunnelName asks for a short identifier used to name this tunnel's
@@ -322,9 +370,10 @@ func askTierPreset(suggestedHost string) tierPreset {
 	fmt.Println()
 	fmt.Println(menuItem("1", "run a live benchmark against the other box now (most accurate)"))
 	fmt.Println(menuItem("2", "I know the link's bandwidth and RTT — enter them"))
-	fmt.Println(menuItem("3", "just pick a tier (light/medium/heavy/insane)"))
+	fmt.Println(menuItem("3", "just pick a tier (light/medium/heavy/extreme/insane)"))
+	fmt.Println(menuItem("0", "cancel"))
 
-	switch readLineDefault("choice", "3") {
+	switch askChoice("choice", "3") {
 	case "1":
 		return askLiveBenchTier(suggestedHost)
 	case "2":
@@ -347,7 +396,8 @@ func askStaticTier() tierPreset {
 		}
 		fmt.Println(menuItem(fmt.Sprint(i+1), label+" — "+t.blurb))
 	}
-	choice := readLineDefault("choice", fmt.Sprint(defaultTierIndex+1))
+	fmt.Println(menuItem("0", "cancel"))
+	choice := askChoice("choice", fmt.Sprint(defaultTierIndex+1))
 	if idx := indexFromChoice(choice, len(tiers)); idx >= 0 {
 		return tiers[idx]
 	}

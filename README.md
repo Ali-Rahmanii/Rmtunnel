@@ -70,6 +70,19 @@ this project's own tunnels (`paqet-server`/`paqet-client` roles). See
 side with forward/socks5) is also the side that dials first, a paqet tunnel
 is offered specifically as a Direct-mode engine choice.
 
+The joining side (Iran) is asked to *enter* the exact encryption key the
+initiating side (Kharej) generated, not given its own — a config-generation
+bug in an earlier version silently generated an independent key on each
+side, which never authenticates. A forwarded port with UDP relaying on
+becomes two paqet `forward` entries (tcp and udp), not one replacing the
+other — an earlier version dropped TCP entirely in that case. Log level
+defaults to `info`, not paqet's own `none` default, so a first connection
+failure is actually diagnosable from the logs. "Manage tunnels" gains two
+paqet-specific actions: **Reapply iptables rules** (Kharej, idempotent —
+safe to re-run) for when the wizard's own attempt didn't take, and
+**Test connection** (Iran, runs `paqet ping`) to check reachability without
+digging through logs by hand.
+
 ### Two transport modes
 
 | mode | how it works | when |
@@ -157,7 +170,10 @@ plain listing — see [color.go](color.go)'s `bigBannerLines`.)
 Options 1/2 are wizards that ask, in order: **direction** (reverse or
 direct — see above, with the setup-order reminder printed right there),
 a name (a box can run more than one tunnel — see below), a token,
-**transport** (TCP or TCP Mux, each with a one-line explanation of the
+**transport family** (TCP, or a UDP preview showing the raw/KCP+FEC/QUIC
+variants BackPack itself offers — not runnable yet, falls back to a real
+TCP pick; use paqet, above, for a working low-latency tunnel today), then
+**TCP variant** (TCP or TCP Mux, each with a one-line explanation of the
 tradeoff — or, under Direct, a choice between this project's own engine and
 **paqet**, see above), which disguises to enable (plus, on whichever side
 dials out, optional **backup addresses** per disguise — tried in order if
@@ -167,8 +183,10 @@ explicit `1232=host:2323`, comma-separated for several at once, plus one
 question about also relaying UDP on them. Buffer sizing is either a live
 benchmark against the other box run right there in the wizard, numbers you
 already know entered by hand, or a named tier — see "Sizing the config"
-below. The wizard then writes the config and offers to install it as a
-systemd service on the spot. Option **H, Help**, is a separate screen
+below. Entering `0` at any numbered wizard question cancels back to the
+main menu instead of continuing with whatever that question's default
+happened to be. The wizard then writes the config and offers to install it
+as a systemd service on the spot. Option **H, Help**, is a separate screen
 (kept out of the main menu itself) walking through each tunnel type
 step by step — Reverse, Direct, paqet, managing tunnels, and tiers/
 benchmarking — see [help.go](help.go).
