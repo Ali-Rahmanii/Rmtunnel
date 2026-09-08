@@ -4,7 +4,7 @@ package main
 // this repo's GitHub Releases), and error messages that point people
 // somewhere useful.
 const (
-	Version        = "0.10.0"
+	Version        = "0.11.0"
 	RepoOwner      = "Ali-Rahmanii"
 	RepoName       = "rmtunnel"
 	RepoURL        = "https://github.com/" + RepoOwner + "/" + RepoName

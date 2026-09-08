@@ -202,6 +202,18 @@ readLoop:
 // maintainer keeps this generation's pool at MinIdle..MaxIdle, reacting
 // immediately to NEED_CONN and topping up or trimming on a slow tick
 // otherwise. See docs/TUNING.md for how to retune these.
+//
+// A burst of real demand (a page load with many parallel requests, or just
+// the ordinary background noise of a public IP being port-scanned) can
+// legitimately push the pool well above MaxIdle for a while — that's
+// needConn doing its job, not a bug. What used to shrink back from such a
+// burst one connection every IdleGrace period (20s default) meant a spike
+// to, say, a few hundred idle sessions took *hours* to unwind, sitting on
+// their pool connections' buffers the whole time for nothing. Once the
+// grace period confirms the burst is actually over (not still climbing),
+// the excess above MaxIdle now closes in one pass instead of trickling out
+// one at a time — shrinkOne only ever closes a connection with zero
+// streams on it, so this never touches anything actually carrying traffic.
 func (c *Client) maintainer(ctx context.Context, needConn <-chan struct{}) {
 	for i := 0; i < c.cfg.MinIdle; i++ {
 		c.spawnOne(ctx)
@@ -231,7 +243,9 @@ func (c *Client) maintainer(ctx context.Context, needConn <-chan struct{}) {
 				if overSince.IsZero() {
 					overSince = time.Now()
 				} else if time.Since(overSince) > c.cfg.IdleGrace.Duration {
-					c.shrinkOne()
+					for i := 0; i < n-c.cfg.MaxIdle; i++ {
+						c.shrinkOne()
+					}
 					overSince = time.Time{}
 				}
 			default:
@@ -402,10 +416,20 @@ func (c *Client) muxSessionWorker(ctx context.Context, p *profileState, epoch []
 		c.sessMu.Unlock()
 	}()
 
+	// The watcher must also be able to tell when AcceptStream below returns
+	// on its own (the session died from a network hiccup, not a generation
+	// shutdown or a deliberate shrink) — without watcherDone as a third
+	// case, that leaves the watcher goroutine blocked forever on this
+	// select, pinning the whole session (and its mux_recv_buffer) alive
+	// until the entire client process exits. tcpPoolWorker's own watcher
+	// already gets this right; this mirrors it.
+	watcherDone := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
 		case <-cs.stop:
+		case <-watcherDone:
+			return
 		}
 		session.Close()
 	}()
@@ -413,6 +437,7 @@ func (c *Client) muxSessionWorker(ctx context.Context, p *profileState, epoch []
 	for {
 		stream, err := session.AcceptStream()
 		if err != nil {
+			close(watcherDone)
 			return
 		}
 		atomic.AddInt32(&cs.streams, 1)

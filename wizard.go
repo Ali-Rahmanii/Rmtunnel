@@ -604,14 +604,20 @@ func askStaticTier() tierPreset {
 		if i == defaultTierIndex {
 			label += dim(" (default)")
 		}
-		fmt.Println(menuItem(fmt.Sprint(i+1), label+" — "+t.blurb))
+		ceilingMbps := float64(staticTierBDP(i).muxStreamBuffer) * 8 / 1e6 / assumedRTT.Seconds()
+		fmt.Println(menuItem(fmt.Sprint(i+1), label+" — "+t.blurb+dim(fmt.Sprintf(" (~%.0f Mbit/s per connection)", ceilingMbps))))
 	}
 	fmt.Println(menuItem("0", "cancel"))
 	choice := askChoice("choice", fmt.Sprint(defaultTierIndex+1))
-	if idx := indexFromChoice(choice, len(tiers)); idx >= 0 {
-		return tiers[idx]
+	idx := indexFromChoice(choice, len(tiers))
+	if idx < 0 {
+		idx = defaultTierIndex
 	}
-	return tiers[defaultTierIndex]
+	tier := staticTierBDP(idx)
+	if tier.recvBuf > tiers[idx].recvBuf {
+		fmt.Println(dim(fmt.Sprintf("  (buffers raised above the tier default to clear a ~%dms link's bandwidth-delay product)", assumedRTT.Milliseconds())))
+	}
+	return tier
 }
 
 func askLiveBenchTier(suggestedHost string) tierPreset {

@@ -145,6 +145,14 @@ type Config struct {
 	MSS         int      `toml:"mss"`         // 0 = leave the OS default (Linux only, see mss_linux.go)
 	ReusePort   bool     `toml:"reuse_port"`  // Linux only, see reuseport_linux.go
 
+	// DebugPprofAddr, if set, starts Go's net/http/pprof on this address —
+	// off by default, and meant to stay that way on a normal install; set it
+	// (e.g. "127.0.0.1:6060", never a public address) only to actually
+	// capture a heap/goroutine profile from a box whose real memory/CPU
+	// usage doesn't match what its config alone would predict, then unset it
+	// again. See main.go's startDebugServer.
+	DebugPprofAddr string `toml:"debug_pprof_addr"`
+
 	// --- pool tuning (client) ---
 	// TCP mode: how many idle, already-authenticated pool connections to keep
 	// standing by, so a new local connection never waits on the tunnel-side

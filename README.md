@@ -300,6 +300,35 @@ explicitly opt-in, build-tagged extras (`mss_linux.go`, `reuseport_linux.go`
 Windows for local development and testing, and cross-compiles to Linux
 without any special setup.
 
+## Performance and diagnostics
+
+- The "just pick a tier" wizard path now floors `recv_buf`/`send_buf`/
+  `mux_stream_buffer` at this project's own typical Iran<->Kharej
+  bandwidth-delay product (assumed 80ms RTT), the same flooring the live/
+  manual benchmark paths already applied — picking a tier by name alone no
+  longer silently caps a single flow's throughput well under what the box
+  and link can actually do. Each tier's menu entry now shows its resulting
+  per-connection throughput ceiling (`~N Mbit/s`) so the choice is informed
+  up front instead of discovered later by timing a transfer.
+- Fixed a real goroutine leak in `mux mode`'s client-side session watcher:
+  a mux session that died from a network hiccup (not a shutdown or a
+  deliberate pool shrink) left its watcher goroutine blocked forever,
+  pinning the whole session — including its `mux_recv_buffer` allocation —
+  alive until the client process exited. On a real link with any
+  reconnects, this compounds over hours; `tcpPoolWorker`'s own watcher
+  already had the right pattern, this now mirrors it (see `client.go`).
+- Fixed the pool's shrink-back-to-idle rate: a demand burst (many parallel
+  requests, or just a public IP's ordinary port-scan background noise) can
+  legitimately push the pool well above `max_idle` — that's correct. What
+  used to shrink back one connection every `idle_grace` (20s default) meant
+  a spike to hundreds of idle sessions took *hours* to unwind. It now
+  drains the whole excess in one pass once the grace period confirms the
+  burst is over, touching only connections with zero streams on them.
+- `debug_pprof_addr` (unset by default) starts Go's own `net/http/pprof` on
+  the given address — set it only to capture a real heap/goroutine profile
+  from a box whose memory/CPU doesn't match what its config would predict,
+  then unset it again; see `debug.go`.
+
 ## What's tested
 
 - All five disguises (`plain`, `noise`, `wss`, `kcp`, `quic`), end-to-end,

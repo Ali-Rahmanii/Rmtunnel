@@ -51,6 +51,8 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	startDebugServer(cfg.DebugPprofAddr)
+
 	switch role {
 	case "server":
 		srv := NewServer(cfg)
