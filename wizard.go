@@ -354,6 +354,9 @@ func askUDPVariant(direction string, listens bool, peerLabel string) (mode strin
 		fmt.Println(dim("overhead the tunnel can add. The control channel itself is plain TCP,"))
 		fmt.Println(dim("on the same port number the UDP pool socket reuses below — different"))
 		fmt.Println(dim("protocols, so the two don't conflict."))
+		fmt.Println(yellow("⚠ the ports you forward next carry UDP only — no TCP at all. Testing"))
+		fmt.Println(yellow("  with ssh/curl/a browser always fails here (\"connection refused\") even"))
+		fmt.Println(yellow("  when everything is working correctly — that's not a UDP protocol."))
 		return "udp", askPlainDisguiseAnswer(listens, peerLabel), true
 	}
 }

@@ -78,6 +78,14 @@ func validPort(s string) bool {
 // always.
 func askPorts(forceUDP bool) []PortMap {
 	fmt.Println(bold("Which ports should be exposed?"))
+	if forceUDP {
+		fmt.Println(yellow("⚠ mode \"udp\" forwards UDP datagrams ONLY on every port below — there is"))
+		fmt.Println(yellow("  no TCP listener on them at all. A TCP client (ssh, curl, a browser) will"))
+		fmt.Println(yellow("  always get \"connection refused\" here — that's correct, not a bug. Only"))
+		fmt.Println(yellow("  point this at a UDP service (WireGuard, a game), and test it with a UDP"))
+		fmt.Println(yellow("  client too (e.g. \"nc -u <host> <port>\"), never ssh/curl."))
+		fmt.Println()
+	}
 	fmt.Println(dim("A bare port (443) means: expose 443 here, and the Kharej box forwards it"))
 	fmt.Println(dim("to its own 127.0.0.1:443 — so the real service must listen on that exact"))
 	fmt.Println(dim("port there."))
