@@ -30,6 +30,19 @@ type disguiseAnswer struct {
 	CertFile    string
 	KeyFile     string
 	Insecure    bool
+
+	// kcp-only — see kcpdisguise.go.
+	KCPPreset       string
+	KCPMTU          int
+	KCPInterval     int
+	KCPResend       int
+	KCPNoDelay      int
+	KCPNoCongestion int
+	KCPSndWnd       int
+	KCPRcvWnd       int
+	KCPAckNoDelay   bool
+	KCPDataShards   int
+	KCPParityShards int
 }
 
 // askBackupAddrs offers extra addresses for the same disguise, tried in
@@ -283,8 +296,8 @@ func askUDPFamily(direction string) string {
 		rawLabel = "UDP — raw datagrams" + dim(" (preview — Reverse direction only, for now)")
 	}
 	fmt.Println(menuItem("1", rawLabel))
-	fmt.Println(menuItem("2", "UDP + KCP + FEC"+dim(" (preview)")+" — low-latency gaming tunnel, reliable UDP with always-on error correction"))
-	fmt.Println(menuItem("3", "UDP + QUIC"+dim(" (preview)")+" — encrypted TLS 1.3 streams over UDP, self-tuning, great under loss"))
+	fmt.Println(menuItem("2", bold("UDP + KCP + FEC")+" — low-latency gaming tunnel, reliable UDP with always-on error correction"))
+	fmt.Println(menuItem("3", "UDP + QUIC"+" — encrypted TLS 1.3 streams over UDP, self-tuning, great under loss"))
 	fmt.Println(menuItem("0", "back"))
 	choice := askChoice("choice", "1")
 
@@ -298,13 +311,33 @@ func askUDPFamily(direction string) string {
 		return "udp"
 	}
 
-	fmt.Println()
-	if choice == "1" {
-		fmt.Println(yellow("⚠ raw UDP is Reverse-direction only for now — switch direction to use it."))
-	} else {
-		fmt.Println(yellow("⚠ not implemented yet — for a working low-latency raw-packet/KCP tunnel"))
-		fmt.Println(yellow("  today, pick paqet as the Direct-mode engine instead."))
+	if choice == "2" {
+		fmt.Println()
+		fmt.Println(dim("KCP+FEC isn't a separate transport family here — it's one more disguise"))
+		fmt.Println(dim("type, alongside plain/noise/wss, so it keeps this project's own failover"))
+		fmt.Println(dim("and backup-address support instead of losing them for something exotic."))
+		fmt.Println(dim("Enable \"kcp\" at the next question. TCP Mux (recommended below) is the"))
+		fmt.Println(dim("natural pairing — many streams multiplexed over a few KCP sessions,"))
+		fmt.Println(dim("exactly how paqet and BackPack both build the same idea."))
+		pressEnter()
+		return "" // falls through to askTCPVariant, tcpmux recommended
 	}
+
+	if choice == "3" {
+		fmt.Println()
+		fmt.Println(dim("QUIC isn't a separate transport family here either — it's one more"))
+		fmt.Println(dim("disguise type, alongside plain/noise/wss/kcp, so it keeps this"))
+		fmt.Println(dim("project's own failover and backup-address support. It self-tunes its"))
+		fmt.Println(dim("own congestion control, so there's no preset/tuning question like kcp's"))
+		fmt.Println(dim("— just the same TLS cert/domain question wss already asks. Enable"))
+		fmt.Println(dim("\"quic\" at the next question. TCP Mux (recommended below) is the"))
+		fmt.Println(dim("natural pairing, same as with kcp."))
+		pressEnter()
+		return "" // falls through to askTCPVariant, tcpmux recommended
+	}
+
+	fmt.Println()
+	fmt.Println(yellow("⚠ raw UDP is Reverse-direction only for now — switch direction to use it."))
 	pressEnter()
 	return ""
 }
@@ -389,11 +422,95 @@ func askDisguises(listens bool, peerLabel string) []disguiseAnswer {
 		out = append(out, d)
 	}
 
+	if confirm("  kcp"+dim(" (low-latency \"gaming\" carrier — reliable UDP, tuned for steady ping)"), false) {
+		d := disguiseAnswer{Type: "kcp"}
+		if listens {
+			port := readLineDefault("    kcp listen port", "9002")
+			d.Addr = "0.0.0.0:" + port
+		} else {
+			ip := readLine("    " + peerLabel + "'s public address: ")
+			port := readLineDefault("    its kcp port", "9002")
+			d.Addr = ip + ":" + port
+			d.BackupAddrs = askBackupAddrs()
+		}
+		askKCPSettings(&d)
+		out = append(out, d)
+	}
+
+	if confirm("  quic"+dim(" (TLS 1.3 over UDP, self-tuning — great under loss, looks like HTTP/3)"), false) {
+		d := disguiseAnswer{Type: "quic"}
+		if listens {
+			port := readLineDefault("    quic listen port", "9003")
+			d.Addr = "0.0.0.0:" + port
+			d.Domain = readLineDefault("    domain (enter it if you have a real cert, else leave blank)", "")
+			d.CertFile = readLineDefault("    cert file path (blank = self-signed)", "")
+			if d.CertFile != "" {
+				d.KeyFile = readLineDefault("    key file path", "")
+			}
+		} else {
+			ip := readLine("    " + peerLabel + "'s public address: ")
+			port := readLineDefault("    its quic port", "9003")
+			d.Addr = ip + ":" + port
+			d.Domain = readLineDefault("    domain (exactly what you set on the listening side, or blank)", "")
+			d.Insecure = confirm("    does the listening side use a self-signed cert?", true)
+			d.BackupAddrs = askBackupAddrs()
+		}
+		out = append(out, d)
+	}
+
 	for len(out) == 0 {
 		fmt.Println(red("you need to enable at least one."))
 		out = askDisguises(listens, peerLabel)
 	}
 	return out
+}
+
+// askKCPSettings fills d's KCP fields — a named preset (both ends must
+// agree on all of it, none of it is negotiated on the wire) or full manual
+// entry. See kcpdisguise.go for what each preset actually means.
+func askKCPSettings(d *disguiseAnswer) {
+	fmt.Println()
+	fmt.Println(bold(magenta("KCP performance preset")))
+	for i, p := range kcpPresets {
+		fmt.Println(menuItem(fmt.Sprint(i+1), bold(p.name)+" — "+p.blurb))
+	}
+	choice := readLineDefault("choice", "2") // turbo
+	idx := indexFromChoice(choice, len(kcpPresets))
+	if idx < 0 {
+		idx = 1
+	}
+	preset := kcpPresets[idx].name
+	d.KCPPreset = preset
+
+	if preset != "custom" {
+		// Resolve the preset into concrete fields right now, the same way
+		// tierPreset's TCP tuning is resolved at wizard time rather than
+		// re-derived at load — the config file ends up with both the label
+		// and the numbers it means, inspectable without cross-referencing
+		// kcpdisguise.go's table.
+		tmp := &DisguiseConfig{KCPPreset: preset}
+		applyKCPPreset(tmp)
+		d.KCPMTU, d.KCPInterval, d.KCPResend = tmp.KCPMTU, tmp.KCPInterval, tmp.KCPResend
+		d.KCPNoDelay, d.KCPNoCongestion, d.KCPAckNoDelay = tmp.KCPNoDelay, tmp.KCPNoCongestion, tmp.KCPAckNoDelay
+		d.KCPSndWnd, d.KCPRcvWnd = tmp.KCPSndWnd, tmp.KCPRcvWnd
+		d.KCPDataShards, d.KCPParityShards = tmp.KCPDataShards, tmp.KCPParityShards
+		return
+	}
+
+	fmt.Println()
+	fmt.Println(dim("custom — every value below applies as entered."))
+	d.KCPMTU = parseIntDefault(readLineDefault("MTU (50-1500, keep below the path MTU)", "1250"), 1250)
+	d.KCPInterval = parseIntDefault(readLineDefault("interval ms (10-5000, lower = more responsive, more CPU)", "10"), 10)
+	d.KCPResend = parseIntDefault(readLineDefault("resend (0=off, 1=aggressive, 2=most aggressive fast-retransmit)", "2"), 2)
+	d.KCPNoDelay = parseIntDefault(readLineDefault("nodelay (0=off, 1=on — skip the delayed-ACK wait)", "1"), 1)
+	d.KCPNoCongestion = parseIntDefault(readLineDefault("nocongestion (0=TCP-like fairness, 1=disable for max speed)", "1"), 1)
+	d.KCPAckNoDelay = confirm("acknodelay (ack immediately — lower latency, more bandwidth)", true)
+	d.KCPSndWnd = parseIntDefault(readLineDefault("send window (packets)", "1024"), 1024)
+	d.KCPRcvWnd = parseIntDefault(readLineDefault("receive window (packets)", "1024"), 1024)
+	if confirm("enable FEC (forward error correction) for a lossy link?", true) {
+		d.KCPDataShards = parseIntDefault(readLineDefault("FEC data shards", "10"), 10)
+		d.KCPParityShards = parseIntDefault(readLineDefault("FEC parity shards", "3"), 3)
+	}
 }
 
 // askTierPreset sizes the buffers for this tunnel. A tier name alone is a
@@ -524,15 +641,30 @@ func renderDisguiseBlock(d disguiseAnswer, listens bool) string {
 			fmt.Fprintf(&b, "backup_addrs = [%s]\n", quotedList(d.BackupAddrs))
 		}
 	}
-	if d.Type == "wss" {
+	if d.Type == "wss" || d.Type == "quic" {
 		fmt.Fprintf(&b, "domain = %q\n", d.Domain)
-		fmt.Fprintf(&b, "path = %q\n", "/ws")
+		if d.Type == "wss" {
+			fmt.Fprintf(&b, "path = %q\n", "/ws")
+		}
 		if listens {
 			fmt.Fprintf(&b, "cert_file = %q\n", d.CertFile)
 			fmt.Fprintf(&b, "key_file = %q\n", d.KeyFile)
 		} else {
 			fmt.Fprintf(&b, "insecure_skip_verify = %v\n", d.Insecure)
 		}
+	}
+	if d.Type == "kcp" {
+		fmt.Fprintf(&b, "kcp_preset = %q\n", d.KCPPreset)
+		fmt.Fprintf(&b, "kcp_mtu = %d\n", d.KCPMTU)
+		fmt.Fprintf(&b, "kcp_interval = %d\n", d.KCPInterval)
+		fmt.Fprintf(&b, "kcp_resend = %d\n", d.KCPResend)
+		fmt.Fprintf(&b, "kcp_nodelay = %d\n", d.KCPNoDelay)
+		fmt.Fprintf(&b, "kcp_nocongestion = %d\n", d.KCPNoCongestion)
+		fmt.Fprintf(&b, "kcp_acknodelay = %v\n", d.KCPAckNoDelay)
+		fmt.Fprintf(&b, "kcp_sndwnd = %d\n", d.KCPSndWnd)
+		fmt.Fprintf(&b, "kcp_rcvwnd = %d\n", d.KCPRcvWnd)
+		fmt.Fprintf(&b, "kcp_datashards = %d\n", d.KCPDataShards)
+		fmt.Fprintf(&b, "kcp_parityshards = %d\n", d.KCPParityShards)
 	}
 	return b.String()
 }

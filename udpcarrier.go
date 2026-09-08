@@ -90,16 +90,25 @@ type udpCarrierSession struct {
 // pool socket and every forwarded port's own UDP listener. Ports are
 // started here rather than in Run's usual loop because this mode's ports
 // are always UDP-only — see the package doc comment above.
+//
+// Every socket in this file resolves and binds "udp4" explicitly, not the
+// family-agnostic "udp" — an unspecified address ("0.0.0.0:PORT") given to
+// the generic network still resolves to a dual-stack "[::]:PORT" bind on
+// most systems, and if that box's kernel has IPv6 disabled or
+// net.ipv6.bindv6only=1 set, a socket bound that way silently never
+// receives the IPv4 traffic this project's config format is entirely
+// written in terms of. "udp4" removes the ambiguity outright rather than
+// depending on a kernel default matching what was intended.
 func (s *Server) runUDPCarrier(ctx context.Context) {
 	addr := s.firstDisguiseAddr()
 	if addr == "" {
 		log.Fatalf("[udp] no enabled [[disguise]] entry to bind the pool socket to")
 	}
-	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	udpAddr, err := net.ResolveUDPAddr("udp4", addr)
 	if err != nil {
 		log.Fatalf("[udp] resolving pool address %s: %v", addr, err)
 	}
-	sock, err := net.ListenUDP("udp", udpAddr)
+	sock, err := net.ListenUDP("udp4", udpAddr)
 	if err != nil {
 		log.Fatalf("[udp] listening on %s: %v", addr, err)
 	}
@@ -243,11 +252,11 @@ func (s *Server) obtainUDPFlow(ctx context.Context, target string) *udpPoolFlow 
 // address is its own end-user flow, paired on first sight with a freshly
 // claimed pool flow and relayed for as long as either side keeps sending.
 func (s *Server) runUDPCarrierPort(ctx context.Context, pm PortMap) {
-	addr, err := net.ResolveUDPAddr("udp", pm.Listen)
+	addr, err := net.ResolveUDPAddr("udp4", pm.Listen)
 	if err != nil {
 		log.Fatalf("[udp] resolving %s: %v", pm.Listen, err)
 	}
-	sock, err := net.ListenUDP("udp", addr)
+	sock, err := net.ListenUDP("udp4", addr)
 	if err != nil {
 		log.Fatalf("[udp] listening on %s: %v", pm.Listen, err)
 	}
@@ -347,10 +356,14 @@ func (s *Server) serveUDPCarrierSession(ctx context.Context, portSock *net.UDPCo
 		case <-ctx.Done():
 			return
 		case data := <-sess.toFlow:
-			s.udpSock.WriteToUDP(data, sess.flow.peer)
+			if n, err := s.udpSock.WriteToUDP(data, sess.flow.peer); err == nil {
+				atomic.AddInt64(&totalBytesTransferred, int64(n))
+			}
 			resetTimer(idle, udpIdleTimeout)
 		case data := <-sess.flow.inbound:
-			portSock.WriteToUDP(data, sess.userAddr)
+			if n, err := portSock.WriteToUDP(data, sess.userAddr); err == nil {
+				atomic.AddInt64(&totalBytesTransferred, int64(n))
+			}
 			resetTimer(idle, udpIdleTimeout)
 		case <-idle.C:
 			return
@@ -380,11 +393,11 @@ func (c *Client) udpCarrierSpawnOne(ctx context.Context, p *profileState, epoch 
 	atomic.AddInt32(&c.activeCount, 1)
 	defer atomic.AddInt32(&c.activeCount, -1)
 
-	remote, err := net.ResolveUDPAddr("udp", p.addr())
+	remote, err := net.ResolveUDPAddr("udp4", p.addr())
 	if err != nil {
 		return
 	}
-	sock, err := net.DialUDP("udp", nil, remote)
+	sock, err := net.DialUDP("udp4", nil, remote)
 	if err != nil {
 		return
 	}
@@ -423,11 +436,11 @@ func (c *Client) udpCarrierSpawnOne(ctx context.Context, p *profileState, epoch 
 	sock.SetReadDeadline(time.Time{})
 	target := string(buf[:n])
 
-	localAddr, err := net.ResolveUDPAddr("udp", target)
+	localAddr, err := net.ResolveUDPAddr("udp4", target)
 	if err != nil {
 		return
 	}
-	local, err := net.DialUDP("udp", nil, localAddr)
+	local, err := net.DialUDP("udp4", nil, localAddr)
 	if err != nil {
 		return
 	}
@@ -459,8 +472,10 @@ func udpCarrierPump(src, dst *net.UDPConn) {
 		if err != nil {
 			return
 		}
-		if _, err := dst.Write(buf[:n]); err != nil {
+		w, err := dst.Write(buf[:n])
+		if err != nil {
 			return
 		}
+		atomic.AddInt64(&totalBytesTransferred, int64(w))
 	}
 }

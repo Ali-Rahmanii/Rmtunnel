@@ -5,7 +5,7 @@ filtering, and at the question "if one way of carrying the tunnel starts
 getting blocked, how does it recover without you sitting at a terminal
 editing config files at 2am."
 
-## The three disguises
+## The five disguises
 
 Configured per entry under `[[disguise]]` in both `server.toml` and
 `client.toml` — see `examples/`.
@@ -15,13 +15,15 @@ Configured per entry under `[[disguise]]` in both `server.toml` and
 | `plain` | our own 5-byte header, then our handshake, in the clear | cheapest CPU-wise, easiest to fingerprint |
 | `noise` | uniform random bytes from the first byte on (Noise NNpsk0, keyed from your token — see `noise.go`) | small crypto overhead, no plaintext signature |
 | `wss` | an ordinary TLS handshake + WebSocket upgrade — looks like HTTPS to anything that isn't specifically probing your path | TLS overhead, most code, strongest disguise |
+| `kcp` | reliable UDP with always-on FEC, encrypted with a key derived from your token — not primarily a disguise, but a UDP flow doesn't get the same header-signature scrutiny a TCP one does, and it buys the lowest steady latency of the five for a lossy link | UDP is more commonly rate-limited/blocked outright on some networks than TCP:443 is |
+| `quic` | an ordinary TLS 1.3 handshake over UDP — looks like HTTP/3 to anything not specifically probing it, the same idea as `wss` but for UDP-preferring paths | same ClientHello-fingerprint caveat as `wss` below, self-tuning congestion control (no manual window knobs) |
 
 None of these hide *that* two hosts are talking a lot to each other, or make
 a determined, targeted investigation impossible. What they defeat is the
 cheap, automated stuff: signature matching on a fixed protocol header
-(`plain`'s weakness), and — for `wss` — a plain "what's listening on this
-port" probe, which gets a normal-looking website instead of anything
-tunnel-shaped.
+(`plain`'s weakness), and — for `wss`/`quic` — a plain "what's listening on
+this port" probe, which gets a normal-looking website (or HTTP/3 endpoint)
+instead of anything tunnel-shaped.
 
 **What `wss` does not do**: present a TLS ClientHello that fingerprints as a
 real browser's. Go's `crypto/tls` has its own recognizable fingerprint
@@ -78,9 +80,11 @@ notes) rather than just designed on paper.
 
 ## What to actually configure for an Iran deployment
 
-1. Enable all three disguises. Order them `wss`, `noise`, `plain` in the
-   **client's** config — server-side order doesn't matter, it listens on all
-   of them regardless.
+1. Enable all the disguises you plan to use. Order them `wss`, `noise`,
+   `plain` in the **client's** config — server-side order doesn't matter, it
+   listens on all of them regardless. Add `kcp` and/or `quic` if UDP gets
+   through on your path too — same automatic-failover machinery, just more
+   profiles to fall through.
 2. Put `wss` on port 443. It is the least likely port to be blocked
    wholesale (too much collateral damage to legitimate HTTPS traffic), and a
    TLS-looking connection to 443 is the least suspicious thing this project

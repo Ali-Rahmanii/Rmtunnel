@@ -489,6 +489,16 @@ func (s *Server) Stats() string {
 	switch s.cfg.Mode {
 	case "tcp":
 		return prefix + statsLine(connected, "idle pool", len(s.poolQueue))
+	case "udp":
+		// A real bug this exact confusion caught: this used to fall into
+		// the tcpmux case below, which reads s.sessions — a field udp mode
+		// never touches — so this line always read "sessions=0 streams=0"
+		// regardless of how many pool flows were actually authenticated
+		// and idle, waiting to be claimed. See udpcarrier.go.
+		s.udpMu.Lock()
+		flows := len(s.udpFlows)
+		s.udpMu.Unlock()
+		return prefix + statsLine(connected, "pool flows", flows)
 	default:
 		s.sessMu.Lock()
 		n := len(s.sessions)

@@ -3,8 +3,9 @@
 **مستندات فارسی: [README.fa.md](README.fa.md)**
 
 A small, self-contained reverse-tunnel core: **TCP and UDP** forwarding over
-**TCP/TCPMux** transports, three ways to disguise the connection (`plain` /
-`noise` / `wss`), automatic failover between them, multi-tunnel management,
+**TCP/TCPMux** transports, five ways to disguise the connection (`plain` /
+`noise` / `wss` / `kcp` / `quic`), automatic failover between them,
+multi-tunnel management, health-checked multi-backend load-balanced ports,
 and a built-in benchmark that sizes the config to your actual hardware and
 link — and feeds straight into the setup wizard, so you don't have to
 hand-copy numbers. No web panel, no telegram bot — the goal isn't to
@@ -93,7 +94,7 @@ digging through logs by hand.
 
 `mode` must match on both ends — there is no negotiation on the wire for it.
 
-### Three disguises, tried in order, switched automatically
+### Five disguises, tried in order, switched automatically
 
 ```toml
 [[disguise]]
@@ -104,14 +105,23 @@ type = "noise"   # encrypted, no fixed protocol header to fingerprint
 ...
 [[disguise]]
 type = "plain"   # raw TCP, cheapest, most easily fingerprinted
+...
+[[disguise]]
+type = "kcp"     # reliable UDP + always-on FEC — lowest steady latency, e.g. for gaming
+...
+[[disguise]]
+type = "quic"    # TLS 1.3 over UDP, self-tuning congestion control — looks like HTTP/3
 ```
 
 The **server listens on every enabled one, all the time**. The **client**
 tries them in the order they're listed, skipping any still cooling down from
 a recent failure, and automatically falls back — no config edit, no
-restart — if the one it's using starts failing or its RTT goes bad. Full
-writeup, including why this beats an explicit "servers agree to switch"
-handshake: **[docs/CENSORSHIP.md](docs/CENSORSHIP.md)**.
+restart — if the one it's using starts failing or its RTT goes bad. Every
+disguise, `kcp` and `quic` included, produces an ordinary `net.Conn`, so
+this failover and the rest of the pool/handshake/mux machinery works
+identically regardless of which one is active. Full writeup, including why
+this beats an explicit "servers agree to switch" handshake:
+**[docs/CENSORSHIP.md](docs/CENSORSHIP.md)**.
 
 ## Protocol (summary — full detail in [protocol.go](protocol.go))
 
@@ -171,20 +181,26 @@ plain listing — see [color.go](color.go)'s `bigBannerLines`.)
 Options 1/2 are wizards that ask, in order: **direction** (reverse or
 direct — see above, with the setup-order reminder printed right there),
 then — before name, token, or ports — **transport family**: TCP, or UDP.
-Picking UDP offers BackPack's three UDP-carrier variants; only **raw
-datagrams** is real (Reverse direction only — see `mode = "udp"` above),
-the other two (KCP+FEC, QUIC) are a description, not runnable code, and
-fall back to a real TCP pick — use paqet, above, for a working low-latency
-tunnel today. Picking TCP asks **TCP variant** next (TCP or TCP Mux, each
+Picking UDP offers BackPack's three UDP-carrier variants: **raw
+datagrams** is real (Reverse direction only — see `mode = "udp"` above);
+**UDP + KCP + FEC** and **UDP + QUIC** are both real too, offered as two
+more disguise types (alongside plain/noise/wss) rather than a separate
+carrier, so they keep this project's own failover/backup-address support
+— picking either one explains that and falls through to a real TCP-variant
+pick, where enabling "kcp" or "quic" at the disguise step is what actually
+turns it on. Picking TCP asks **TCP variant** next (TCP or TCP Mux, each
 with a one-line explanation of the tradeoff — or, under Direct, a choice
 between this project's own engine and **paqet**, see above). Then: a name
 (a box can run more than one tunnel — see below), a token, which disguises
-to enable (plus, on whichever side dials out, optional **backup
-addresses** per disguise — tried in order if the primary one stops
-working, e.g. a second IP for the same box), and (server side) which ports
-to forward — accepting `1232`, `1232:2323`, or the explicit
-`1232=host:2323`, comma-separated for several at once, plus (TCP/TCP Mux
-only — `mode = "udp"` is UDP-only already) one question about also
+to enable — plain, noise, wss, kcp (low-latency, tuned FEC/window preset),
+quic (self-tuning TLS 1.3 over UDP) — plus, on whichever side dials out,
+optional **backup addresses** per disguise (tried in order if the primary
+one stops working, e.g. a second IP for the same box), and (server side)
+which ports to forward — a bare port (`443`), an explicit backend
+(`443=127.0.0.1:2096`), or several health-checked backends for one port
+balanced round-robin over whichever are live (`443=127.0.0.1:2096|127.0.0.1:2097`),
+comma-separated for several ports at once, plus (TCP/TCP Mux only —
+`mode = "udp"` is UDP-only already) one question about also
 relaying UDP on them. Buffer sizing is either a live
 benchmark against the other box run right there in the wizard, numbers you
 already know entered by hand, or a named tier — see "Sizing the config"
@@ -266,8 +282,14 @@ without any special setup.
 
 ## What's tested
 
-- All three disguises (`plain`, `noise`, `wss`), end-to-end, both transport
-  modes, against a real HTTP backend
+- All five disguises (`plain`, `noise`, `wss`, `kcp`, `quic`), end-to-end,
+  both transport modes, against a real TCP backend — `kcp` and `quic`
+  specifically verified with single and 40-concurrent-stream traffic, plus
+  their wizard-generated configs round-tripped through `LoadConfig`
+- Multi-backend, health-checked, round-robined ports (`443=a|b`): confirmed
+  round-robin distribution across live backends, and that killing one
+  backend gets it ejected after `backendFailThreshold` consecutive failed
+  probes without affecting traffic to the rest
 - UDP forwarding end-to-end, including session reuse across multiple
   datagrams from the same source
 - Concurrent load (20 simultaneous requests) on every disguise/mode
@@ -348,6 +370,26 @@ scratch. Fixed by adding a value-receiver `MarshalText` to `Duration` in
 [config.go](config.go), verified with a standalone encode→decode→validate
 round-trip.
 
+**Every relayed connection leaked forever in tcpmux mode** (the default,
+covering `plain`/`noise`/`wss`/`kcp`/`quic` alike): `Pipe` half-closes each
+side of a connection as its own direction finishes reading, so a client
+still waiting on a reply after it stops sending isn't cut off early — but
+that relies on the destination supporting `CloseWrite`, and `*smux.Stream`
+doesn't implement it at all (only a full `Close()` that tears down both
+directions via a FIN frame). The type-assertion silently failed, so the
+peer's `Read` on that stream blocked forever waiting for a half-close signal
+that could never arrive — leaking the mux stream and the local backend
+connection on every single relayed connection, invisible until enough of
+them piled up to exhaust `max_streams_per_session`. Found while load-testing
+the new `quic` disguise: `total transferred` stayed at exactly `0B` on
+whichever side read from the stream, and `streams=N` in the periodic stats
+line only ever grew, never shrank. Fixed by bounding how long `Pipe` waits
+for the second direction once the first finishes (`pipeTrailingGrace`,
+30s) — still gives a real trailing reply its due, but guarantees eventual
+cleanup instead of a permanent leak. Confirmed fixed (streams dropping back
+to 0 and both sides' byte counters agreeing) across `plain`, `kcp`, and
+`quic`.
+
 **The benchmark under-reported real link speed**, most visibly on upload and
 on any link with non-trivial RTT: the timed window started immediately, so
 a meaningful slice of the 4-second test was TCP still climbing out of slow
@@ -365,12 +407,12 @@ its own measured elapsed time instead of the client assuming its own — see
 
 - A TLS ClientHello that fingerprints as a real browser's (needs a uTLS-style
   library)
-- A native KCP+FEC or QUIC *carrier* — `mode = "udp"` (above) is the plain
-  raw-datagram variant of that same family, implemented natively; the other
-  two stay a menu preview, not runnable code. paqet (above) already covers
-  the "raw-packet, low-latency" need well for real use today, and wrapping
-  it was a better use of effort than building a second, worse version of
-  the same idea from scratch
+- A native KCP+FEC or QUIC *carrier* (a raw-UDP transport with no TCP
+  framing at all) — `mode = "udp"` (above) is that variant, implemented
+  natively. `kcp` and `quic` are both real too, but as disguise types (see
+  "Five disguises" above) rather than a separate carrier — they keep this
+  project's own failover/backup-address/pool machinery instead of losing it
+  for something exotic, the same tradeoff BackPack itself makes
 - A full Layer-3/IP tunnel (BackPack's GRE-in-Noise mode) or multi-socket
   bandwidth bonding — `direction = "direct"` covers the TCP-level "the
   server's inbound doesn't get through" case without the much larger scope

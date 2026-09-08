@@ -343,7 +343,10 @@ func (c *Client) serveTarget(ctx context.Context, carrier net.Conn, target strin
 		c.handleUDPCarrier(ctx, carrier, addr)
 		return
 	}
-	local, err := dialLocal(ctx, c.cfg, target)
+	// target may name several "|"-separated backends (see backendpool.go) —
+	// pickBackend resolves that down to the one to actually dial for this
+	// flow, health-checked and round-robined if there's more than one.
+	local, err := dialLocal(ctx, c.cfg, pickBackend(target))
 	if err != nil {
 		carrier.Close()
 		return

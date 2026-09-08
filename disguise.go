@@ -26,6 +26,10 @@ func startDisguiseListener(cfg *Config, d *DisguiseConfig) (accepter, error) {
 		return &plainAccepter{ln: ln, cfg: cfg, d: d}, nil
 	case "wss":
 		return startWSSListener(cfg, d)
+	case "kcp":
+		return startKCPListener(cfg, d)
+	case "quic":
+		return startQUICListener(cfg, d)
 	default:
 		return nil, fmt.Errorf("unknown disguise type %q", d.Type)
 	}
@@ -69,6 +73,12 @@ func dialDisguise(ctx context.Context, cfg *Config, d *DisguiseConfig) (net.Conn
 	switch d.Type {
 	case "wss":
 		return wssDial(ctx, cfg, d, cfg.DialTimeout.Duration)
+
+	case "kcp":
+		return dialKCP(ctx, cfg, d)
+
+	case "quic":
+		return dialQUIC(ctx, cfg, d)
 
 	case "plain", "noise":
 		dialer := net.Dialer{Timeout: cfg.DialTimeout.Duration}

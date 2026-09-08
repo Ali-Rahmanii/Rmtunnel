@@ -5,6 +5,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // bufPool hands out reusable copy buffers so a busy tunnel does not churn the
@@ -31,20 +32,48 @@ var totalBytesTransferred int64
 // has ever run, for the stats logger in main.go.
 func TotalBytesTransferred() int64 { return atomic.LoadInt64(&totalBytesTransferred) }
 
+// pipeTrailingGrace bounds how long Pipe waits for a second direction to
+// finish on its own once the first direction is done. Only matters when that
+// first direction's destination can't be half-closed (see copyDirection) —
+// a *smux.Stream, *kcp.UDPSession, or *quic.Stream have no CloseWrite, so the
+// peer is never told "no more data coming" and can otherwise block on Read
+// forever, leaking the stream and its local backend connection until the
+// whole tunnel session drops. This grace period still lets a real trailing
+// reply (a client that half-closed its write side but is still awaiting a
+// response) land normally in the common case, without leaking indefinitely
+// in the case where no reply is coming.
+const pipeTrailingGrace = 30 * time.Second
+
 // Pipe copies bytes both ways between a and b until one side is done, then
 // closes both. Each direction half-closes its destination as soon as its
 // source hits EOF (when the underlying type supports it, e.g. *net.TCPConn),
 // so a client that finished sending but is still waiting on a reply is not
-// cut off — only fully closed once both directions have actually finished.
-// A naive io.Copy-then-Close-everything proxy drops that trailing reply.
+// cut off — only fully closed once both directions have actually finished,
+// or pipeTrailingGrace passes, whichever comes first.
 func Pipe(a, b net.Conn, bufSize int) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); copyDirection(b, a, bufSize) }()
-	go func() { defer wg.Done(); copyDirection(a, b, bufSize) }()
-	wg.Wait()
+	done := make(chan struct{}, 2)
+	go func() { copyDirection(b, a, bufSize); done <- struct{}{} }()
+	go func() { copyDirection(a, b, bufSize); done <- struct{}{} }()
+
+	remaining := 2
+	<-done
+	remaining--
+
+	select {
+	case <-done:
+		remaining--
+	case <-time.After(pipeTrailingGrace):
+	}
+
 	a.Close()
 	b.Close()
+
+	// Drain whatever's left: if the grace period expired above, the closes
+	// just now unblock the still-running direction's Read, so this returns
+	// almost immediately rather than actually waiting out another timeout.
+	for ; remaining > 0; remaining-- {
+		<-done
+	}
 }
 
 func copyDirection(dst net.Conn, src net.Conn, bufSize int) {

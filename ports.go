@@ -41,6 +41,14 @@ func parsePortSpec(spec string) (PortMap, error) {
 		if !validPort(port) || target == "" {
 			return PortMap{}, fmt.Errorf("bad port spec %q (want PORT=host:port)", spec)
 		}
+		// target may list several "|"-separated backends — see
+		// backendpool.go — each just has to be non-empty here; the pool
+		// itself validates reachability continuously at runtime.
+		for _, b := range strings.Split(target, "|") {
+			if strings.TrimSpace(b) == "" {
+				return PortMap{}, fmt.Errorf("bad port spec %q (empty backend between |'s)", spec)
+			}
+		}
 		return PortMap{Listen: "0.0.0.0:" + port, Target: target}, nil
 	}
 	if colon := strings.Index(spec, ":"); colon >= 0 {
@@ -69,12 +77,14 @@ func validPort(s string) bool {
 // "also relay UDP" would be redundant; otherwise it asks that once, same as
 // always.
 func askPorts(forceUDP bool) []PortMap {
-	fmt.Println(bold("Enter the ports you want forwarded."))
-	fmt.Println(dim("Any of these, comma-separated for several at once:"))
-	fmt.Println(dim("  1232              -> forwards to 127.0.0.1:1232"))
-	fmt.Println(dim("  1232:2323         -> forwards to 127.0.0.1:2323"))
-	fmt.Println(dim("  1232=host:2323    -> forwards to any host:port"))
-	fmt.Println(dim("Blank line to finish."))
+	fmt.Println(bold("Which ports should be exposed?"))
+	fmt.Println(dim("A bare port (443) means: expose 443 here, and the Kharej box forwards it"))
+	fmt.Println(dim("to its own 127.0.0.1:443 — so the real service must listen on that exact"))
+	fmt.Println(dim("port there."))
+	fmt.Println(dim("If the service is elsewhere, say so: 443=127.0.0.1:2096"))
+	fmt.Println(dim("Several backends for one port: 443=127.0.0.1:2096|127.0.0.1:2097"))
+	fmt.Println(dim("(separated by |, health-checked continuously, balanced over the live ones)"))
+	fmt.Println(dim("Comma-separated for several ports at once. Blank line to finish."))
 
 	var ports []PortMap
 	for {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // ensurePaqetBinary offers to download paqet if it isn't already installed —
@@ -63,9 +64,18 @@ func askPaqetNetwork(listenPort string) (iface, ip, mac string) {
 func paqetForwardsFromPorts(ports []PortMap) []paqetForward {
 	var out []paqetForward
 	for _, p := range ports {
-		out = append(out, paqetForward{Listen: p.Listen, Target: p.Target, Protocol: "tcp"})
+		target := p.Target
+		// askPorts' "|"-separated multiple-backend syntax (backendpool.go)
+		// is health-checked and balanced by rmtunnel's own client — paqet
+		// has no equivalent concept in its YAML, so rather than write it
+		// invalid config, fall back to the first backend and say so.
+		if i := strings.Index(target, "|"); i >= 0 {
+			fmt.Println(yellow("⚠ paqet doesn't support multiple backends per port — using only the first: " + target[:i]))
+			target = target[:i]
+		}
+		out = append(out, paqetForward{Listen: p.Listen, Target: target, Protocol: "tcp"})
 		if p.UDP {
-			out = append(out, paqetForward{Listen: p.Listen, Target: p.Target, Protocol: "udp"})
+			out = append(out, paqetForward{Listen: p.Listen, Target: target, Protocol: "udp"})
 		}
 	}
 	return out

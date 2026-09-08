@@ -29,6 +29,19 @@ type PortMap struct {
 //     listener receives (a probe, a browser, a censor's crawler) gets
 //     DecoyRoot instead, so the port looks like an ordinary website that
 //     happens to also speak WebSocket on one path.
+//   - "kcp"    — a reliable, ordered session over raw UDP ([xtaci/kcp-go],
+//     the same library paqet and BackPack both build on), encrypted with a
+//     key derived from Token. Tuned for the lowest steady latency a lossy
+//     link can offer, at the cost of spending extra bandwidth on parity and
+//     immediate ACKs — the low-latency "gaming" carrier. Because kcp-go's
+//     stream mode makes a session behave exactly like a reliable byte
+//     stream (see kcpdisguise.go), this needs no protocol changes anywhere
+//     else in this project — the same handshake, pool, and mux code every
+//     other disguise already uses runs on top of it unchanged.
+//   - "quic"   — a TLS 1.3 session over UDP, self-tuning its own congestion
+//     control (no manual window knobs, unlike "kcp") — looks like ordinary
+//     HTTP/3 traffic on the wire. Reuses wss's cert_file/key_file/domain/
+//     insecure_skip_verify fields as-is. See quicdisguise.go.
 //
 // The client tries entries in the order they appear, skipping any still in
 // a failure cool-down — see profiles.go. The server simply listens on every
@@ -36,7 +49,7 @@ type PortMap struct {
 // no coordination message ever has to cross the (possibly filtered) network
 // for a switch to take effect. See docs/CENSORSHIP.md for the reasoning.
 type DisguiseConfig struct {
-	Type    string `toml:"type"` // "plain" | "noise" | "wss"
+	Type    string `toml:"type"` // "plain" | "noise" | "wss" | "kcp"
 	Enabled bool   `toml:"enabled"`
 
 	ListenAddr string `toml:"listen_addr"` // server
@@ -57,6 +70,24 @@ type DisguiseConfig struct {
 	KeyFile   string `toml:"key_file"`
 	DecoyRoot string `toml:"decoy_root"`           // empty = a small built-in placeholder page
 	Insecure  bool   `toml:"insecure_skip_verify"` // client: skip cert verification (self-signed server certs)
+
+	// kcp-only. KCPPreset, if one of "balance"/"turbo"/"aggressive"/
+	// "throughput", fills every field below from kcpdisguise.go's preset
+	// table (numbers studied from BackPack's own — same names, same
+	// values) and the fields are ignored; "" (or "custom") means use them
+	// as given instead. Both ends must agree on every one of these — none
+	// of it is negotiated, see kcpdisguise.go.
+	KCPPreset       string `toml:"kcp_preset"`
+	KCPMTU          int    `toml:"kcp_mtu"`
+	KCPInterval     int    `toml:"kcp_interval"`
+	KCPResend       int    `toml:"kcp_resend"`
+	KCPNoDelay      int    `toml:"kcp_nodelay"`
+	KCPNoCongestion int    `toml:"kcp_nocongestion"`
+	KCPSndWnd       int    `toml:"kcp_sndwnd"`
+	KCPRcvWnd       int    `toml:"kcp_rcvwnd"`
+	KCPAckNoDelay   bool   `toml:"kcp_acknodelay"`
+	KCPDataShards   int    `toml:"kcp_datashards"` // 0 disables FEC entirely
+	KCPParityShards int    `toml:"kcp_parityshards"`
 }
 
 // Config is shared by both roles; a field only one role reads is simply
@@ -268,8 +299,19 @@ func (c *Config) validate() error {
 			if d.Path == "" {
 				d.Path = "/ws"
 			}
+		case "kcp":
+			if d.KCPPreset != "" && d.KCPPreset != "custom" && !validKCPPreset(d.KCPPreset) {
+				return fmt.Errorf("disguise[%d] (kcp): kcp_preset must be \"balance\", \"turbo\", \"aggressive\", \"throughput\", \"custom\" or blank, got %q", i, d.KCPPreset)
+			}
+			if (d.KCPPreset == "" || d.KCPPreset == "custom") && d.KCPDataShards > 0 && d.KCPParityShards == 0 {
+				return fmt.Errorf("disguise[%d] (kcp): kcp_parityshards must be > 0 when kcp_datashards is set (0 disables FEC entirely — set both to 0, not just one)", i)
+			}
+		case "quic":
+			// Reuses wss's cert_file/key_file/domain/insecure_skip_verify
+			// fields as-is — nothing quic-specific to validate beyond what
+			// the wss case already established the shape of.
 		default:
-			return fmt.Errorf("disguise[%d]: type must be \"plain\", \"noise\" or \"wss\", got %q", i, d.Type)
+			return fmt.Errorf("disguise[%d]: type must be \"plain\", \"noise\", \"wss\", \"kcp\" or \"quic\", got %q", i, d.Type)
 		}
 		// Which field is required tracks who actually listens vs. dials —
 		// not raw Role, which under Direction "direct" has the "server"

@@ -148,6 +148,14 @@ func (s *Server) runUDPListener(ctx context.Context, pm PortMap) {
 func (c *Client) handleUDPCarrier(ctx context.Context, carrier net.Conn, targetAddr string) {
 	defer carrier.Close()
 
+	// Multiple "|"-separated backends (backendpool.go) aren't health-checked
+	// or balanced for UDP — a TCP connect probe proves nothing about a UDP
+	// endpoint's reachability, the same limitation BackPack's own backend
+	// pool documents. The first configured backend is what gets used.
+	if i := strings.Index(targetAddr, "|"); i >= 0 {
+		targetAddr = targetAddr[:i]
+	}
+
 	raddr, err := net.ResolveUDPAddr("udp", targetAddr)
 	if err != nil {
 		return

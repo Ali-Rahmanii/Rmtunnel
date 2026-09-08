@@ -391,6 +391,10 @@ func disguiseAnswersToConfig(answers []disguiseAnswer, listens bool) []DisguiseC
 			Type: d.Type, Enabled: true, Domain: d.Domain, Path: d.Path,
 			CertFile: d.CertFile, KeyFile: d.KeyFile, Insecure: d.Insecure,
 			BackupAddrs: d.BackupAddrs,
+			KCPPreset:   d.KCPPreset, KCPMTU: d.KCPMTU, KCPInterval: d.KCPInterval,
+			KCPResend: d.KCPResend, KCPNoDelay: d.KCPNoDelay, KCPNoCongestion: d.KCPNoCongestion,
+			KCPAckNoDelay: d.KCPAckNoDelay, KCPSndWnd: d.KCPSndWnd, KCPRcvWnd: d.KCPRcvWnd,
+			KCPDataShards: d.KCPDataShards, KCPParityShards: d.KCPParityShards,
 		}
 		if listens {
 			dc.ListenAddr = d.Addr
