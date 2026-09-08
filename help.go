@@ -14,8 +14,9 @@ func menuHelp() {
 		fmt.Println(menuItem("1", "rmtunnel — Reverse (Kharej dials Iran, the usual setup)"))
 		fmt.Println(menuItem("2", "rmtunnel — Direct (Iran dials Kharej)"))
 		fmt.Println(menuItem("3", "paqet — raw-packet + KCP tunnel"))
-		fmt.Println(menuItem("4", "Managing tunnels after they're built"))
-		fmt.Println(menuItem("5", "Picking a performance tier / benchmarking"))
+		fmt.Println(menuItem("4", "rmtunnel — raw UDP carrier (mode \"udp\")"))
+		fmt.Println(menuItem("5", "Managing tunnels after they're built"))
+		fmt.Println(menuItem("6", "Picking a performance tier / benchmarking"))
 		fmt.Println(menuItem("0", "back"))
 
 		switch readLine("choice: ") {
@@ -26,8 +27,10 @@ func menuHelp() {
 		case "3":
 			helpPaqet()
 		case "4":
-			helpManage()
+			helpUDPCarrier()
 		case "5":
+			helpManage()
+		case "6":
 			helpTiers()
 		case "0", "":
 			return
@@ -73,6 +76,30 @@ func helpDirect() {
 	fmt.Println()
 	fmt.Println(dim("Use Direct when Iran's inbound port doesn't get through but its"))
 	fmt.Println(dim("outbound does — otherwise Reverse (above) is the simpler default."))
+	pressEnter()
+}
+
+func helpUDPCarrier() {
+	sectionHeader("Help — raw UDP carrier")
+	fmt.Println(bold("Order matters: Iran (server) must be up FIRST — same as ordinary Reverse."))
+	fmt.Println(dim("Native to rmtunnel (udpcarrier.go), for UDP applications that already"))
+	fmt.Println(dim("tolerate loss (WireGuard, a game) and want minimal tunnel overhead."))
+	fmt.Println()
+	fmt.Println("  1. On the " + bold("Iran") + " box: main menu → " + bold("[1] Build Iran tunnel") + " → Direction:")
+	fmt.Println("     " + bold("Reverse") + " → Transport family: " + bold("UDP") + " → UDP variant: " + bold("UDP") + " (raw")
+	fmt.Println("     datagrams). The port question that follows is UDP-only already —")
+	fmt.Println("     no \"also relay UDP?\" question, unlike TCP/TCP Mux mode.")
+	fmt.Println("  2. On the " + bold("Kharej") + " box: main menu → " + bold("[2] Build Kharej tunnel") + " → same Direction")
+	fmt.Println("     and transport choices, same token, same disguise address.")
+	fmt.Println("  3. Both install as services the same way any tunnel does. Check")
+	fmt.Println("     " + bold("Manage tunnels") + " for status; there's nothing UDP-specific there yet")
+	fmt.Println("     beyond what every tunnel already has.")
+	fmt.Println()
+	fmt.Println(dim("No framing, no retransmission, no encryption of its own — one packet in"))
+	fmt.Println(dim("becomes one packet out, end to end. The control channel is still fully"))
+	fmt.Println(dim("protected by whichever disguise you picked; only the data path is raw."))
+	fmt.Println(dim("Direct direction and forwarding ordinary TCP aren't supported in this"))
+	fmt.Println(dim("mode yet — use Reverse TCP/TCP Mux (or paqet) for those."))
 	pressEnter()
 }
 

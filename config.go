@@ -236,11 +236,17 @@ func defaultConfig() *Config {
 }
 
 func (c *Config) validate() error {
-	if c.Mode != "tcp" && c.Mode != "tcpmux" {
-		return fmt.Errorf("mode must be \"tcp\" or \"tcpmux\", got %q", c.Mode)
+	if c.Mode != "tcp" && c.Mode != "tcpmux" && c.Mode != "udp" {
+		return fmt.Errorf("mode must be \"tcp\", \"tcpmux\" or \"udp\", got %q", c.Mode)
 	}
 	if c.Direction != "reverse" && c.Direction != "direct" {
 		return fmt.Errorf("direction must be \"reverse\" or \"direct\", got %q", c.Direction)
+	}
+	if c.Mode == "udp" && c.Direction != "reverse" {
+		// The udp carrier's pool socket is inherently reverse-shaped — the
+		// server listens for it, the client dials — the same way paqet's
+		// own protocol is inherently direct-shaped. See udpcarrier.go.
+		return fmt.Errorf("mode \"udp\" only supports direction \"reverse\" for now")
 	}
 	if c.Token == "" {
 		return fmt.Errorf("token must not be empty")

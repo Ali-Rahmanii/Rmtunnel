@@ -89,6 +89,7 @@ digging through logs by hand.
 |---|---|---|
 | `tcp` | Each tunnel connection is used **once**: a handful of pre-authenticated connections sit idle (`min_idle`), one is claimed the instant a real user connects, and a replacement is dialed to refill the pool. The tunnel-side handshake latency never sits on a real user's connection. | simplest, lowest CPU overhead |
 | `tcpmux` | A few long-lived sessions ([smux](https://github.com/xtaci/smux) v2) each carry many concurrent flows as multiplexed streams — far fewer real sockets under high concurrent load. | many simultaneous users/connections |
+| `udp` | A third carrier, not a variant of the other two: end-user UDP traffic is relayed as raw datagrams, one packet in becoming one packet out end to end — no framing, no retransmission, no encryption of its own (the control channel stays fully protected by whichever disguise is configured; only pool capacity moves to a dedicated UDP socket pair). `[[ports]]` entries are always UDP-only in this mode. Reverse direction only for now — the pool socket is inherently server-listens/client-dials shaped. See [udpcarrier.go](udpcarrier.go). | a UDP application that already tolerates loss (WireGuard, a game) and wants the least overhead the tunnel can add |
 
 `mode` must match on both ends — there is no negotiation on the wire for it.
 
@@ -169,18 +170,22 @@ plain listing — see [color.go](color.go)'s `bigBannerLines`.)
 
 Options 1/2 are wizards that ask, in order: **direction** (reverse or
 direct — see above, with the setup-order reminder printed right there),
-a name (a box can run more than one tunnel — see below), a token,
-**transport family** (TCP, or a UDP preview showing the raw/KCP+FEC/QUIC
-variants BackPack itself offers — not runnable yet, falls back to a real
-TCP pick; use paqet, above, for a working low-latency tunnel today), then
-**TCP variant** (TCP or TCP Mux, each with a one-line explanation of the
-tradeoff — or, under Direct, a choice between this project's own engine and
-**paqet**, see above), which disguises to enable (plus, on whichever side
-dials out, optional **backup addresses** per disguise — tried in order if
-the primary one stops working, e.g. a second IP for the same box), and
-(server side) which ports to forward — accepting `1232`, `1232:2323`, or the
-explicit `1232=host:2323`, comma-separated for several at once, plus one
-question about also relaying UDP on them. Buffer sizing is either a live
+then — before name, token, or ports — **transport family**: TCP, or UDP.
+Picking UDP offers BackPack's three UDP-carrier variants; only **raw
+datagrams** is real (Reverse direction only — see `mode = "udp"` above),
+the other two (KCP+FEC, QUIC) are a description, not runnable code, and
+fall back to a real TCP pick — use paqet, above, for a working low-latency
+tunnel today. Picking TCP asks **TCP variant** next (TCP or TCP Mux, each
+with a one-line explanation of the tradeoff — or, under Direct, a choice
+between this project's own engine and **paqet**, see above). Then: a name
+(a box can run more than one tunnel — see below), a token, which disguises
+to enable (plus, on whichever side dials out, optional **backup
+addresses** per disguise — tried in order if the primary one stops
+working, e.g. a second IP for the same box), and (server side) which ports
+to forward — accepting `1232`, `1232:2323`, or the explicit
+`1232=host:2323`, comma-separated for several at once, plus (TCP/TCP Mux
+only — `mode = "udp"` is UDP-only already) one question about also
+relaying UDP on them. Buffer sizing is either a live
 benchmark against the other box run right there in the wizard, numbers you
 already know entered by hand, or a named tier — see "Sizing the config"
 below. Entering `0` at any numbered wizard question cancels back to the
@@ -287,6 +292,10 @@ without any special setup.
   forwarding correctly through to the real backend either way
 - Backup-address rotation: a deliberately unreachable primary address,
   confirmed the client rotates to the configured backup and connects
+- `mode = "udp"` end-to-end: a real UDP echo backend through the full pool
+  (auth tag, target announcement, session reuse across multiple packets
+  with idle gaps between them), plus the wizard's own generated config
+  re-verified through the same path and through `LoadConfig`
 - paqet config generation: both the Kharej (`role: server`) and Iran
   (`role: client`, forward + SOCKS5 + the "gaming" manual KCP preset) wizard
   outputs loaded and validated cleanly through paqet's own real config
@@ -356,11 +365,12 @@ its own measured elapsed time instead of the client assuming its own — see
 
 - A TLS ClientHello that fingerprints as a real browser's (needs a uTLS-style
   library)
-- A raw UDP or KCP/QUIC *carrier* implemented natively in this project (as
-  opposed to forwarding UDP traffic *through* the existing TCP/TCPMux
-  carrier, which `[[ports]]`'s `udp = true` already does) — paqet (above)
-  already does exactly this well, and wrapping it was a better use of effort
-  than building a second, worse version of the same idea from scratch
+- A native KCP+FEC or QUIC *carrier* — `mode = "udp"` (above) is the plain
+  raw-datagram variant of that same family, implemented natively; the other
+  two stay a menu preview, not runnable code. paqet (above) already covers
+  the "raw-packet, low-latency" need well for real use today, and wrapping
+  it was a better use of effort than building a second, worse version of
+  the same idea from scratch
 - A full Layer-3/IP tunnel (BackPack's GRE-in-Noise mode) or multi-socket
   bandwidth bonding — `direction = "direct"` covers the TCP-level "the
   server's inbound doesn't get through" case without the much larger scope

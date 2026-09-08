@@ -64,9 +64,11 @@ func validPort(s string) bool {
 
 // askPorts collects forwarded-port entries interactively, accepting any of
 // parsePortsLine's formats (including several comma-separated on one line),
-// across as many lines as the user wants, then asks once whether these
-// ports should also relay UDP.
-func askPorts() []PortMap {
+// across as many lines as the user wants. forceUDP is true for mode "udp"
+// (see udpcarrier.go), where every port is UDP-only already and asking
+// "also relay UDP" would be redundant; otherwise it asks that once, same as
+// always.
+func askPorts(forceUDP bool) []PortMap {
 	fmt.Println(bold("Enter the ports you want forwarded."))
 	fmt.Println(dim("Any of these, comma-separated for several at once:"))
 	fmt.Println(dim("  1232              -> forwards to 127.0.0.1:1232"))
@@ -92,7 +94,11 @@ func askPorts() []PortMap {
 		ports = append(ports, parsed...)
 	}
 
-	if confirm("also relay UDP on these ports? (e.g. for WireGuard, games)", false) {
+	relayUDP := forceUDP
+	if !forceUDP {
+		relayUDP = confirm("also relay UDP on these ports? (e.g. for WireGuard, games)", false)
+	}
+	if relayUDP {
 		for i := range ports {
 			ports[i].UDP = true
 		}

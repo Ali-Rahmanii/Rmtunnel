@@ -39,6 +39,12 @@ type Server struct {
 	sessions []*muxSession
 
 	resource *notifier
+
+	// Mode "udp" only — see udpcarrier.go.
+	udpSock   *net.UDPConn
+	udpMu     sync.Mutex
+	udpFlows  map[string]*udpPoolFlow
+	udpFlowCh chan *udpPoolFlow
 }
 
 func NewServer(cfg *Config) *Server {
@@ -46,6 +52,8 @@ func NewServer(cfg *Config) *Server {
 		cfg:       cfg,
 		poolQueue: make(chan net.Conn, 4096),
 		resource:  newNotifier(),
+		udpFlows:  make(map[string]*udpPoolFlow),
+		udpFlowCh: make(chan *udpPoolFlow, 4096),
 	}
 }
 
@@ -55,14 +63,21 @@ func NewServer(cfg *Config) *Server {
 // client's next connection attempt uses, that listener is already up and
 // already feeds the same admitTunnelConn. See profiles.go for the reasoning.
 func (s *Server) Run(ctx context.Context) error {
-	// Ports are always this box's job regardless of Direction — the "server"
-	// role always owns [[ports]] and always exposes them to real users; only
-	// how the control channel/pool capacity is obtained changes. See
-	// direct.go.
-	for _, pm := range s.cfg.Ports {
-		go s.runPortListener(ctx, pm)
-		if pm.UDP {
-			go s.runUDPListener(ctx, pm)
+	// Mode "udp" owns its ports itself — every one is UDP-only there, a
+	// different mechanism from udp.go's "also relay UDP alongside TCP" — see
+	// udpcarrier.go's package doc comment.
+	if s.cfg.Mode == "udp" {
+		go s.runUDPCarrier(ctx)
+	} else {
+		// Ports are always this box's job regardless of Direction — the
+		// "server" role always owns [[ports]] and always exposes them to
+		// real users; only how the control channel/pool capacity is
+		// obtained changes. See direct.go.
+		for _, pm := range s.cfg.Ports {
+			go s.runPortListener(ctx, pm)
+			if pm.UDP {
+				go s.runUDPListener(ctx, pm)
+			}
 		}
 	}
 
@@ -311,6 +326,13 @@ func (s *Server) admitPoolConn(conn net.Conn) {
 		s.sessions = append(s.sessions, ms)
 		s.sessMu.Unlock()
 		s.resource.broadcast()
+
+	default:
+		// Mode "udp" never reaches here — its pool arrives on a dedicated
+		// UDP socket (udpcarrier.go), not as a rolePool claim on a
+		// disguise's TCP listener. Closing defensively rather than leaking
+		// the connection if one ever did.
+		conn.Close()
 	}
 }
 

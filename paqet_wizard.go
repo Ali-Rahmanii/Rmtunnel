@@ -225,7 +225,7 @@ func wizardPaqetIran(name string) {
 	kcp := askPaqetKCP("", true)
 	fmt.Println()
 
-	ports := askPorts()
+	ports := askPorts(false)
 	forwards := paqetForwardsFromPorts(ports)
 	fmt.Println()
 
@@ -388,7 +388,7 @@ func editPaqetTunnelBody(t tunnelRef) {
 		fmt.Println(yellow("⚠ update the peer's key too, or it will stop connecting."))
 
 	case portsOpt > 0 && choice == fmt.Sprint(portsOpt):
-		ports := askPorts()
+		ports := askPorts(false)
 		c.Forward = paqetForwardsFromPorts(ports)
 
 	case choice == fmt.Sprint(kcpOpt):

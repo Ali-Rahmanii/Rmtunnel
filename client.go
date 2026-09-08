@@ -254,6 +254,8 @@ func (c *Client) spawnOne(ctx context.Context) {
 		go c.tcpPoolWorker(ctx, profile, epoch)
 	case "tcpmux":
 		go c.muxSessionWorker(ctx, profile, epoch)
+	case "udp":
+		go c.udpCarrierSpawnOne(ctx, profile, epoch)
 	}
 }
 

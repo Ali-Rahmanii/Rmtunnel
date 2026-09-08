@@ -79,6 +79,9 @@ func wizardServerBody() {
 		}
 	}
 
+	mode := askTransportMode(direction)
+	fmt.Println()
+
 	name := askTunnelName("server")
 	fmt.Println()
 
@@ -90,13 +93,15 @@ func wizardServerBody() {
 	fmt.Println(yellow("⚠ put this exact token in the client (Kharej) config too."))
 	fmt.Println()
 
-	mode := askTransportMode()
-	fmt.Println()
-
 	disguises := askDisguises(listens, "Kharej box")
+	if mode == "udp" {
+		fmt.Println(yellow("⚠ mode \"udp\" reuses the first enabled disguise above's port for its own"))
+		fmt.Println(yellow("  raw UDP pool socket — UDP and that disguise's TCP listener share the"))
+		fmt.Println(yellow("  same port number without conflict, being different protocols."))
+	}
 	fmt.Println()
 
-	ports := askPorts()
+	ports := askPorts(mode == "udp")
 	fmt.Println()
 
 	benchHost := ""
@@ -139,6 +144,9 @@ func wizardClientBody() {
 		}
 	}
 
+	mode := askTransportMode(direction)
+	fmt.Println()
+
 	name := askTunnelName("client")
 	fmt.Println()
 
@@ -147,9 +155,6 @@ func wizardClientBody() {
 		fmt.Println(red("token can't be empty."))
 		token = readLineDefault("Security token", "")
 	}
-	fmt.Println()
-
-	mode := askTransportMode()
 	fmt.Println()
 
 	disguises := askDisguises(listens, "Iran server")
@@ -220,15 +225,25 @@ func askDirectEngine() string {
 // comment in config.go). A raw UDP or QUIC/KCP carrier isn't implemented
 // here yet; forwarding UDP traffic *through* whichever of these two is
 // chosen is a separate, already-supported yes/no in askPorts below.
-func askTransportMode() string {
+// askTransportMode asks family first (TCP or UDP), then the specific
+// variant within it — the same two-level shape BackPack itself uses. It's
+// asked before name/token/ports (see wizardServer/wizardClient) since the
+// whole rest of the wizard branches on the answer: a udp-mode tunnel skips
+// the TCP-only questions and asks about UDP forwarding differently.
+// direction decides whether "UDP — raw datagrams" is offered as a real,
+// runnable choice (Reverse only — see udpcarrier.go) or stays a preview
+// like the other two UDP variants.
+func askTransportMode(direction string) string {
 	fmt.Println(bold(magenta("Transport family")))
 	fmt.Println(dim("Both ends must use the same one — there's no negotiation on the wire."))
 	fmt.Println()
 	fmt.Println(menuItem("1", bold("TCP")+dim(" (default)")+" — reliable, works everywhere"))
-	fmt.Println(menuItem("2", "UDP"+dim(" (preview)")+" — lower latency, better on lossy/throttled links"))
+	fmt.Println(menuItem("2", "UDP — raw datagrams, or a preview of KCP+FEC/QUIC"))
 	fmt.Println(menuItem("0", "cancel"))
 	if askChoice("choice", "1") == "2" {
-		askUDPFamilyPreview()
+		if mode := askUDPFamily(direction); mode != "" {
+			return mode
+		}
 	}
 	return askTCPVariant()
 }
@@ -237,7 +252,7 @@ func askTransportMode() string {
 // agree, since nothing on the wire negotiates it (see Config.Mode's doc
 // comment in config.go). Forwarding UDP traffic *through* whichever of
 // these two is chosen is a separate, already-supported yes/no in askPorts
-// below — not the same thing as a UDP carrier (see askUDPFamilyPreview).
+// below — not the same thing as a UDP carrier (see askUDPFamily).
 func askTCPVariant() string {
 	fmt.Println()
 	fmt.Println(bold(magenta("TCP variant")))
@@ -250,22 +265,48 @@ func askTCPVariant() string {
 	return "tcpmux"
 }
 
-// askUDPFamilyPreview shows the UDP carrier options BackPack itself offers
-// — a preview only, nothing here is runnable yet, so it always falls back
-// to picking a real TCP variant afterward. paqet (offered as a Direct-mode
-// engine choice) already covers the "raw/KCP, low-latency" need for real
-// use today; native UDP/KCP/QUIC transports are a larger, separate project
-// — see README.md and docs/TUNING.md for the reasoning.
-func askUDPFamilyPreview() {
+// askUDPFamily offers BackPack's three UDP carrier variants. Only "raw
+// datagrams" (mode "udp" — see udpcarrier.go) is actually implemented, and
+// only under Direction "reverse": its pool socket is inherently
+// server-listens/client-dials shaped, the same way paqet's own protocol is
+// inherently direct-shaped. The other two stay descriptions, not runnable
+// code — each is its own large, separate undertaking (see README.md and
+// docs/TUNING.md), and paqet already covers "raw-packet, low-latency" for
+// real use today via the Direct-mode engine choice. Returns "udp" if the
+// real option was picked, "" if the caller should fall back to a TCP
+// variant instead.
+func askUDPFamily(direction string) string {
 	fmt.Println()
-	fmt.Println(bold(magenta("UDP variant")) + dim(" — preview, not runnable yet"))
-	fmt.Println(menuItem("1", "UDP — raw datagrams, for UDP-based services"))
-	fmt.Println(menuItem("2", "UDP + KCP + FEC — low-latency gaming tunnel, reliable UDP with always-on error correction"))
-	fmt.Println(menuItem("3", "UDP + QUIC — encrypted TLS 1.3 streams over UDP, self-tuning, great under loss"))
+	fmt.Println(bold(magenta("UDP variant")))
+	rawLabel := bold("UDP") + " — raw datagrams, for UDP-based services"
+	if direction != "reverse" {
+		rawLabel = "UDP — raw datagrams" + dim(" (preview — Reverse direction only, for now)")
+	}
+	fmt.Println(menuItem("1", rawLabel))
+	fmt.Println(menuItem("2", "UDP + KCP + FEC"+dim(" (preview)")+" — low-latency gaming tunnel, reliable UDP with always-on error correction"))
+	fmt.Println(menuItem("3", "UDP + QUIC"+dim(" (preview)")+" — encrypted TLS 1.3 streams over UDP, self-tuning, great under loss"))
+	fmt.Println(menuItem("0", "back"))
+	choice := askChoice("choice", "1")
+
+	if choice == "1" && direction == "reverse" {
+		fmt.Println()
+		fmt.Println(dim("Raw UDP: no framing, no retransmission, no encryption of its own — one"))
+		fmt.Println(dim("packet in becomes one packet out, end to end. Best for a UDP protocol"))
+		fmt.Println(dim("that already tolerates loss (WireGuard, a game) and wants the least"))
+		fmt.Println(dim("overhead the tunnel can add. The control channel stays fully protected"))
+		fmt.Println(dim("by whichever disguise you pick next."))
+		return "udp"
+	}
+
 	fmt.Println()
-	readLine(dim("press Enter to go back and pick a TCP variant instead: "))
-	fmt.Println(yellow("⚠ UDP transport isn't runnable yet — for a working low-latency raw-packet/KCP tunnel today, pick paqet as the Direct-mode engine instead."))
+	if choice == "1" {
+		fmt.Println(yellow("⚠ raw UDP is Reverse-direction only for now — switch direction to use it."))
+	} else {
+		fmt.Println(yellow("⚠ not implemented yet — for a working low-latency raw-packet/KCP tunnel"))
+		fmt.Println(yellow("  today, pick paqet as the Direct-mode engine instead."))
+	}
 	pressEnter()
+	return ""
 }
 
 // askTunnelName asks for a short identifier used to name this tunnel's

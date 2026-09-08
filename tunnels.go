@@ -338,7 +338,7 @@ func editTunnelBody(t tunnelRef) {
 
 	case portsOpt > 0 && choice == fmt.Sprint(portsOpt):
 		fmt.Println(dim("current: " + joinPortSpecs(cfg.Ports)))
-		cfg.Ports = askPorts()
+		cfg.Ports = askPorts(cfg.Mode == "udp")
 
 	case choice == fmt.Sprint(disguiseOpt):
 		peerLabel := "Iran server"
