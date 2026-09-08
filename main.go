@@ -37,6 +37,11 @@ func main() {
 		return
 	}
 
+	if os.Args[1] == "restart-all" {
+		restartAllTunnelsCLI()
+		return
+	}
+
 	if len(os.Args) != 3 || (os.Args[1] != "server" && os.Args[1] != "client") {
 		printUsage()
 		os.Exit(2)
@@ -52,6 +57,8 @@ func main() {
 	defer cancel()
 
 	startDebugServer(cfg.DebugPprofAddr)
+
+	go runMetricsSnapshotter(ctx, cfg, path, role)
 
 	switch role {
 	case "server":

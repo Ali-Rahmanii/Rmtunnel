@@ -216,7 +216,7 @@ as a systemd service on the spot. Option **H, Help**, is a separate screen
 step by step — Reverse, Direct, paqet, managing tunnels, and tiers/
 benchmarking — see [help.go](help.go).
 
-Option 3, **Manage rmtunnel**, has four screens:
+Option 3, **Manage rmtunnel**, has nine screens:
 
 - **Manage tunnel** — every tunnel configured on the box, with **Edit**
   (token, ports, disguises, or performance tier — each flagged if the peer
@@ -224,9 +224,9 @@ Option 3, **Manage rmtunnel**, has four screens:
   can run several tunnels at once (each is its own named systemd service
   instance, `rmtunnel-<role>@<name>`) — an Iran box forwarding several
   unrelated services, say, or one box running both a server tunnel for one
-  purpose and a client tunnel for another. Also has **Restart ALL** (every
-  configured tunnel, one confirm) and **File locations** (where every
-  config/unit/log actually is).
+  purpose and a client tunnel for another. Also has **Restart ALL** and
+  **File locations** — kept here too, alongside the peer items below, so
+  either path reaches them.
 - **Status tunnels** — a live dashboard (name/role/transport/state/ports or
   remote address for every configured tunnel), refreshing every few
   seconds, press Enter to return.
@@ -245,9 +245,37 @@ Option 3, **Manage rmtunnel**, has four screens:
   on both ends with no negotiation on the wire, so any switch this screen
   does apply always states exactly what to change on the peer, right after
   making it.
+- **Tunnel metrics** — traffic in/out, and for a `kcp` disguise, real
+  packet-loss/FEC-recovery counters (from kcp-go's own `DefaultSnmp`).
+  Every running tunnel snapshots its own numbers to a small JSON file next
+  to its config every 15s (see `metrics.go`) since it's a separate process
+  from the menu — this screen just reads and renders whatever's there, and
+  says plainly if a snapshot looks stale (the tunnel may not be running).
+- **Restart ALL** — every configured tunnel, one confirm.
+- **Auto refresh** — a systemd timer (`rmtunnel-autorefresh.timer`) that
+  restarts every configured tunnel on a fixed schedule (hours; 0 disables
+  it) — a periodic safety net independent of whether anything's actually
+  wrong, running whether or not the menu itself is ever open again.
+- **Backup & Restore** — bundles every tunnel config on the box (both
+  engines) plus the sysctl tuning file and the auto-refresh schedule into
+  one `.tar.gz` under `/etc/rmtunnel/backups`, and prints the `scp` command
+  to move it to a new server. Restore only ever writes configs back (never
+  old systemd units, which would bake in a stale binary path) and
+  regenerates every tunnel's service fresh via the same install path the
+  wizard itself uses.
+- **File locations** — every config/unit/backup/metrics path on the box,
+  each checked against the real filesystem so a missing one reads as a
+  clear ✖ instead of a guess.
 
-Option 4 applies the sysctl tuning from `docs/TUNING.md` (BBR, socket buffer
-ceilings). Option 6 checks this repo's GitHub Releases, replaces the running
+Option 4, **Optimize**, applies BBR + `fq`, socket buffer ceilings sized for
+what the tiers above actually need, wider accept/SYN backlogs and conntrack
+table, fast `TIME_WAIT` reuse and a wider ephemeral port range, kernel-level
+TCP keepalive, lower `vm.swappiness`, and both `limits.conf`- and
+systemd-level open-file-descriptor ceilings — everything a tunnel server
+handling many concurrent connections on a high-RTT link benefits from, not
+just the congestion-control switch alone (see `tune.go`).
+
+Option 6 checks this repo's GitHub Releases, replaces the running
 binary in place, migrates any tunnel still running under a pre-multi-tunnel
 install (so it shows up in "Manage rmtunnel" instead of running invisibly
 under a name nothing looks for anymore), and restarts every configured
@@ -331,6 +359,16 @@ without any special setup.
 
 ## What's tested
 
+- Tunnel Metrics: real traffic through a live `kcp`+`tcpmux` tunnel,
+  confirming `bytes_in` on one side matches `bytes_out` on the other
+  exactly, and the menu screen renders it correctly
+- Backup & Restore: archive round-tripped byte-for-byte (write, delete the
+  originals, restore, compare), plus the restore path allowlist rejecting
+  a path outside the tunnels/sysctl/auto-refresh locations it's meant to
+  touch
+- Every item in the new Manage rmtunnel menu (Status/Health/Link
+  test/Metrics/Restart ALL/Auto refresh/Backup & Restore/File locations)
+  navigated end-to-end through the real compiled binary with no crashes
 - All five disguises (`plain`, `noise`, `wss`, `kcp`, `quic`), end-to-end,
   both transport modes, against a real TCP backend — `kcp` and `quic`
   specifically verified with single and 40-concurrent-stream traffic, plus

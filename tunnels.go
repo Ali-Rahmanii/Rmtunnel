@@ -111,6 +111,11 @@ func menuManageRmtunnel() {
 		fmt.Println(menuItem("2", "Status tunnels "+dim("(live dashboard)")))
 		fmt.Println(menuItem("3", "Health check "+dim("(find problems and get a fix for each one)")))
 		fmt.Println(menuItem("4", "Link test "+dim("(latency/jitter/loss, transport recommendation)")))
+		fmt.Println(menuItem("5", "Tunnel metrics "+dim("(traffic, packet loss and error correction per tunnel)")))
+		fmt.Println(menuItem("6", "Restart ALL "+dim("(every configured tunnel, one confirm)")))
+		fmt.Println(menuItem("7", "Auto refresh "+dim("(restart every tunnel every N hours)")))
+		fmt.Println(menuItem("8", "Backup & Restore "+dim("(save or restore the full configuration)")))
+		fmt.Println(menuItem("9", "File locations "+dim("(where every config, service and backup lives)")))
 		fmt.Println(menuItem("0", "back"))
 
 		switch strings.ToUpper(strings.TrimSpace(readLine("choice: "))) {
@@ -122,6 +127,16 @@ func menuManageRmtunnel() {
 			menuHealthCheck(listTunnels())
 		case "4":
 			menuLinkTest(listTunnels())
+		case "5":
+			menuTunnelMetrics(listTunnels())
+		case "6":
+			restartAllTunnels(listTunnels())
+		case "7":
+			menuAutoRefresh()
+		case "8":
+			menuBackupRestore()
+		case "9":
+			menuFileLocations()
 		case "0", "":
 			return
 		default:
@@ -198,19 +213,46 @@ func restartAllTunnels(tunnels []tunnelRef) {
 	pressEnter()
 }
 
+// menuFileLocations lists everything this project owns on the box, each
+// checked against the real filesystem — a plain path list can't tell you
+// whether a given piece is actually installed here; this can.
 func menuFileLocations() {
 	sectionHeader("File Locations")
-	rows := [][2]string{
-		{"binary", "/usr/local/bin/rmtunnel"},
-		{"paqet binary", paqetBinPath + " (see paqet.go)"},
-		{"tunnel configs", tunnelsRoot + "/<role>/<name>.toml (paqet: .../paqet-<role>/<name>.yaml)"},
-		{"systemd units", "/etc/systemd/system/rmtunnel-<role>@<name>.service"},
-		{"sysctl tuning", "/etc/sysctl.d/99-rmtunnel.conf"},
-		{"example configs", "/etc/rmtunnel/*.toml.example"},
+	fmt.Println(dim("Everything rmtunnel owns on this server."))
+	fmt.Println()
+
+	present := 0
+	total := 0
+	row := func(label, path string) {
+		total++
+		_, err := os.Stat(path)
+		mark := red("✖")
+		if err == nil {
+			mark = green("✓")
+			present++
+		}
+		fmt.Printf("   %s %-32s %s\n", mark, label, dim(path))
 	}
-	for _, r := range rows {
-		fmt.Printf("  %-16s %s\n", bold(r[0]), dim(r[1]))
+
+	row("Binary", "/usr/local/bin/rmtunnel")
+	row("Paqet binary", paqetBinPath)
+	row("Tunnel configs folder", tunnelsRoot)
+	row("Backups", backupsDir)
+	row("Sysctl tuning", sysctlConfPath)
+	row("Open-file limits", limitsConfPath)
+	row("Systemd default limits", systemdLimitsConfPath)
+	row("Auto-refresh timer", autoRefreshTimerPath)
+	row("Example configs", "/etc/rmtunnel/server.toml.example")
+
+	for _, t := range listTunnels() {
+		label := fmt.Sprintf("Tunnel config (%s)", t.Name)
+		row(label, t.Path)
+		row(fmt.Sprintf("Tunnel service (%s)", t.Name), "/etc/systemd/system/"+t.unit()+".service")
+		row(fmt.Sprintf("Tunnel metrics (%s)", t.Name), metricsPath(t.Path))
 	}
+
+	fmt.Println()
+	fmt.Printf("%d/%d item(s) present — that's normal for features you don't use.\n", present, total)
 	fmt.Println()
 	fmt.Println(dim("logs: journalctl -u rmtunnel-<role>@<name> -f"))
 	pressEnter()

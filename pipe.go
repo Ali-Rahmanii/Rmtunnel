@@ -32,6 +32,20 @@ var totalBytesTransferred int64
 // has ever run, for the stats logger in main.go.
 func TotalBytesTransferred() int64 { return atomic.LoadInt64(&totalBytesTransferred) }
 
+// metricsBytesIn/Out split that same running total by direction relative to
+// carrier — the tunnel-side connection, named that in both Pipe's callers
+// (server.go's handleLocalConn, client.go's serveTarget) — rather than
+// relative to Role, so both sides of a tunnel report the same physical
+// bytes the same way: "in" is whatever arrived from the tunnel, "out" is
+// whatever this box sent into it. See metrics.go, which snapshots these to
+// disk for the "Tunnel Metrics" menu screen — a separate process from
+// whichever tunnel is actually running, so it can't just read a live
+// variable.
+var (
+	metricsBytesIn  int64
+	metricsBytesOut int64
+)
+
 // pipeTrailingGrace bounds how long Pipe waits for a second direction to
 // finish on its own once the first direction is done. Only matters when that
 // first direction's destination can't be half-closed (see copyDirection) —
@@ -44,16 +58,17 @@ func TotalBytesTransferred() int64 { return atomic.LoadInt64(&totalBytesTransfer
 // in the case where no reply is coming.
 const pipeTrailingGrace = 30 * time.Second
 
-// Pipe copies bytes both ways between a and b until one side is done, then
-// closes both. Each direction half-closes its destination as soon as its
-// source hits EOF (when the underlying type supports it, e.g. *net.TCPConn),
-// so a client that finished sending but is still waiting on a reply is not
-// cut off — only fully closed once both directions have actually finished,
-// or pipeTrailingGrace passes, whichever comes first.
-func Pipe(a, b net.Conn, bufSize int) {
+// Pipe copies bytes both ways between local and carrier until one side is
+// done, then closes both. Each direction half-closes its destination as
+// soon as its source hits EOF (when the underlying type supports it, e.g.
+// *net.TCPConn), so a client that finished sending but is still waiting on
+// a reply is not cut off — only fully closed once both directions have
+// actually finished, or pipeTrailingGrace passes, whichever comes first.
+// carrier is always the tunnel-side connection — see metricsBytesIn/Out.
+func Pipe(local, carrier net.Conn, bufSize int) {
 	done := make(chan struct{}, 2)
-	go func() { copyDirection(b, a, bufSize); done <- struct{}{} }()
-	go func() { copyDirection(a, b, bufSize); done <- struct{}{} }()
+	go func() { copyDirection(local, carrier, bufSize, &metricsBytesIn); done <- struct{}{} }()
+	go func() { copyDirection(carrier, local, bufSize, &metricsBytesOut); done <- struct{}{} }()
 
 	remaining := 2
 	<-done
@@ -65,8 +80,8 @@ func Pipe(a, b net.Conn, bufSize int) {
 	case <-time.After(pipeTrailingGrace):
 	}
 
-	a.Close()
-	b.Close()
+	local.Close()
+	carrier.Close()
 
 	// Drain whatever's left: if the grace period expired above, the closes
 	// just now unblock the still-running direction's Read, so this returns
@@ -76,11 +91,12 @@ func Pipe(a, b net.Conn, bufSize int) {
 	}
 }
 
-func copyDirection(dst net.Conn, src net.Conn, bufSize int) {
+func copyDirection(dst net.Conn, src net.Conn, bufSize int, dirCounter *int64) {
 	buf := getBuf(bufSize)
 	defer putBuf(buf)
 	n, _ := io.CopyBuffer(dst, src, buf)
 	atomic.AddInt64(&totalBytesTransferred, n)
+	atomic.AddInt64(dirCounter, n)
 	if cw, ok := dst.(interface{ CloseWrite() error }); ok {
 		cw.CloseWrite()
 	}

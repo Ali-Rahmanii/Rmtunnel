@@ -126,7 +126,10 @@ func (s *Server) runUDPListener(ctx context.Context, pm PortMap) {
 						return
 					}
 					atomic.StoreInt64(&sess.lastActive, time.Now().UnixNano())
-					uconn.WriteTo(rbuf[:n], replyTo)
+					if w, err := uconn.WriteTo(rbuf[:n], replyTo); err == nil {
+						atomic.AddInt64(&totalBytesTransferred, int64(w))
+						atomic.AddInt64(&metricsBytesIn, int64(w))
+					}
 				}
 			}(sess, raddr, key)
 		}
@@ -136,6 +139,9 @@ func (s *Server) runUDPListener(ctx context.Context, pm PortMap) {
 			// The carrier is broken; its reader goroutine will notice on its
 			// own next read and tear the session down. Dropping this one
 			// datagram is exactly what a real link would do under loss.
+		} else {
+			atomic.AddInt64(&totalBytesTransferred, int64(n))
+			atomic.AddInt64(&metricsBytesOut, int64(n))
 		}
 	}
 }
@@ -180,6 +186,8 @@ func (c *Client) handleUDPCarrier(ctx context.Context, carrier net.Conn, targetA
 			if writeDatagram(carrier, buf[:n]) != nil {
 				return
 			}
+			atomic.AddInt64(&totalBytesTransferred, int64(n))
+			atomic.AddInt64(&metricsBytesOut, int64(n))
 		}
 	}()
 
@@ -194,6 +202,8 @@ func (c *Client) handleUDPCarrier(ctx context.Context, carrier net.Conn, targetA
 		if _, err := local.Write(buf[:n]); err != nil {
 			break
 		}
+		atomic.AddInt64(&totalBytesTransferred, int64(n))
+		atomic.AddInt64(&metricsBytesIn, int64(n))
 	}
 	<-done
 }

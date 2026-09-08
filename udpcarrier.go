@@ -358,11 +358,13 @@ func (s *Server) serveUDPCarrierSession(ctx context.Context, portSock *net.UDPCo
 		case data := <-sess.toFlow:
 			if n, err := s.udpSock.WriteToUDP(data, sess.flow.peer); err == nil {
 				atomic.AddInt64(&totalBytesTransferred, int64(n))
+				atomic.AddInt64(&metricsBytesOut, int64(n))
 			}
 			resetTimer(idle, udpIdleTimeout)
 		case data := <-sess.flow.inbound:
 			if n, err := portSock.WriteToUDP(data, sess.userAddr); err == nil {
 				atomic.AddInt64(&totalBytesTransferred, int64(n))
+				atomic.AddInt64(&metricsBytesIn, int64(n))
 			}
 			resetTimer(idle, udpIdleTimeout)
 		case <-idle.C:
@@ -454,17 +456,19 @@ func (c *Client) udpCarrierSpawnOne(ctx context.Context, p *profileState, epoch 
 // for udpIdleTimeout or errors — the udp-carrier equivalent of Pipe, but
 // message-for-message rather than stream-chunked, since that is what
 // preserves a UDP application's own packet boundaries end to end.
-func udpCarrierCopy(a, b *net.UDPConn) {
+// udpCarrierCopy's caller always passes (carrier, local) — see
+// metricsBytesIn/Out in pipe.go for what "in"/"out" mean.
+func udpCarrierCopy(carrier, local *net.UDPConn) {
 	done := make(chan struct{}, 2)
-	go func() { udpCarrierPump(a, b); done <- struct{}{} }()
-	go func() { udpCarrierPump(b, a); done <- struct{}{} }()
+	go func() { udpCarrierPump(carrier, local, &metricsBytesIn); done <- struct{}{} }()
+	go func() { udpCarrierPump(local, carrier, &metricsBytesOut); done <- struct{}{} }()
 	<-done
-	a.Close()
-	b.Close()
+	carrier.Close()
+	local.Close()
 	<-done
 }
 
-func udpCarrierPump(src, dst *net.UDPConn) {
+func udpCarrierPump(src, dst *net.UDPConn, dirCounter *int64) {
 	buf := make([]byte, maxUDPDatagram)
 	for {
 		src.SetReadDeadline(time.Now().Add(udpIdleTimeout))
@@ -477,5 +481,6 @@ func udpCarrierPump(src, dst *net.UDPConn) {
 			return
 		}
 		atomic.AddInt64(&totalBytesTransferred, int64(w))
+		atomic.AddInt64(dirCounter, int64(w))
 	}
 }
