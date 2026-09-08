@@ -475,26 +475,23 @@ func pickTier(cores, ramMB int, minMbps float64) tierPreset {
 	}
 }
 
-// tierCeilingMbps is, for each tier in order, the bandwidth right below
-// where pickTier would have picked the next one instead ("insane" has no
-// such ceiling, so it uses a representative high-end figure instead — a
-// link that actually exceeds this needs the live benchmark, not a guess).
-// assumedRTT is this project's own documented route: every real
-// Iran<->Kharej measurement gathered building it sits in the 70-90ms range.
-// staticTierBDP uses both to floor a hand-picked tier's buffers the same
-// way tunedTier.resolved() already does for a real measurement — skipping
-// this is exactly what silently caps a single flow at a fraction of a
-// capable box's real throughput no matter how big its "tier" name sounds,
-// which is invisible until someone actually times a transfer and finds the
-// tunnel nowhere near the link's or the box's real capacity.
-var tierCeilingMbps = []float64{20, 100, 500, 800, 2000}
-
+// assumedRTT is only for the "just pick a tier" menu's own informational
+// throughput-ceiling display below (askStaticTier) — this project's
+// documented route sits in the 70-90ms range in every real measurement
+// gathered building it. It is NOT used to resize any tier's actual
+// buffers: an earlier attempt at that (flooring a picked tier's buffers
+// against an assumed bandwidth ceiling per tier, the same way
+// tunedTier.resolved() does for a *real* measurement) guessed unfounded
+// per-tier bandwidth figures (2000 Mbit/s for "insane," for instance) that
+// turned out wrong for a real, filtered/throttled Iran<->Kharej link — the
+// resulting buffers were oversized well past what that link could actually
+// use, and a real test found *worse* throughput from it, not better,
+// consistent with bufferbloat: a socket buffer far bigger than the real
+// pipe just lets more data queue up before anything signals congestion.
+// There is no static number that's safe to assume here — only measuring
+// the real link (the live-benchmark path, which already floors buffers
+// against a real bandwidth × RTT figure) is guaranteed not to overshoot.
 const assumedRTT = 80 * time.Millisecond
-
-func staticTierBDP(idx int) tierPreset {
-	t := tunedTier{base: tiers[idx], rtt: assumedRTT, bdp: bdpBytes(tierCeilingMbps[idx], assumedRTT)}
-	return t.resolved()
-}
 
 // bdpBytes is the bandwidth-delay product: how many bytes can be "in
 // flight" on the link at once. A socket buffer smaller than this caps

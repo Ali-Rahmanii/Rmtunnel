@@ -330,14 +330,20 @@ without any special setup.
 
 ## Performance and diagnostics
 
-- The "just pick a tier" wizard path now floors `recv_buf`/`send_buf`/
-  `mux_stream_buffer` at this project's own typical Iran<->Kharej
-  bandwidth-delay product (assumed 80ms RTT), the same flooring the live/
-  manual benchmark paths already applied — picking a tier by name alone no
-  longer silently caps a single flow's throughput well under what the box
-  and link can actually do. Each tier's menu entry now shows its resulting
-  per-connection throughput ceiling (`~N Mbit/s`) so the choice is informed
-  up front instead of discovered later by timing a transfer.
+- The "just pick a tier" wizard path shows each tier's own per-connection
+  throughput ceiling (`~N Mbit/s`, at an assumed 80ms RTT) as pure
+  information — computed from that tier's real, unmodified buffer sizes,
+  never a promise the applied config doesn't back. An earlier attempt at
+  actually *flooring* a picked tier's buffers against a guessed per-tier
+  bandwidth ceiling (mirroring what the live/manual benchmark paths
+  correctly do against a *real* measurement) assumed unfounded numbers
+  (2000 Mbit/s for "insane," for instance) that turned out badly wrong for
+  a real, filtered/throttled Iran<->Kharej link: the resulting buffers were
+  oversized well past what that link could use, and a live test found
+  *worse* throughput, not better — consistent with bufferbloat. There is no
+  static number safe to assume here; only the live benchmark (which floors
+  against a measurement, not a guess) is guaranteed not to overshoot. See
+  `assumedRTT`'s doc comment in `bench.go`.
 - Fixed a real goroutine leak in `mux mode`'s client-side session watcher:
   a mux session that died from a network hiccup (not a shutdown or a
   deliberate pool shrink) left its watcher goroutine blocked forever,
@@ -350,8 +356,14 @@ without any special setup.
   legitimately push the pool well above `max_idle` — that's correct. What
   used to shrink back one connection every `idle_grace` (20s default) meant
   a spike to hundreds of idle sessions took *hours* to unwind. It now
-  drains the whole excess in one pass once the grace period confirms the
-  burst is over, touching only connections with zero streams on them.
+  drains roughly half the excess every 2s once the grace period confirms
+  the burst is over — clearing a several-hundred-connection spike in well
+  under a minute — touching only connections with zero streams on them.
+  (Draining the *whole* excess in one pass, tried first, cost real
+  throughput under sustained-but-uneven heavy load: the very next burst
+  then had to pay full session-establishment latency instead of finding
+  spare idle capacity already standing by — halving each tick still
+  recovers fast while leaving a cushion the whole time.)
 - `debug_pprof_addr` (unset by default) starts Go's own `net/http/pprof` on
   the given address — set it only to capture a real heap/goroutine profile
   from a box whose memory/CPU doesn't match what its config would predict,

@@ -209,11 +209,23 @@ readLoop:
 // needConn doing its job, not a bug. What used to shrink back from such a
 // burst one connection every IdleGrace period (20s default) meant a spike
 // to, say, a few hundred idle sessions took *hours* to unwind, sitting on
-// their pool connections' buffers the whole time for nothing. Once the
-// grace period confirms the burst is actually over (not still climbing),
-// the excess above MaxIdle now closes in one pass instead of trickling out
-// one at a time — shrinkOne only ever closes a connection with zero
-// streams on it, so this never touches anything actually carrying traffic.
+// their pool connections' buffers the whole time for nothing.
+//
+// Once the grace period confirms the burst is actually over (not still
+// climbing), this now drains roughly half the excess every tick (2s) —
+// not the whole excess in one pass. A single all-at-once purge, tried
+// first, turned out to cost real throughput under sustained-but-uneven
+// heavy load: shrinkOne only ever closes a connection with zero streams on
+// it, so it never touches anything actively carrying traffic, but nuking
+// the entire spare reserve in one shot means the very next burst has to
+// pay full session-establishment latency (a fresh dial + handshake, a full
+// RTT or more on this project's usual high-RTT links) instead of finding
+// idle capacity already standing by. Halving each tick still clears a
+// several-hundred-connection spike in well under a minute — nowhere near
+// the old multi-hour trickle — while leaving a shrinking-but-nonzero
+// cushion the whole time. overSince is deliberately not reset between
+// these partial shrinks, so once the burst is confirmed over, draining
+// continues every tick without waiting out IdleGrace again for each step.
 func (c *Client) maintainer(ctx context.Context, needConn <-chan struct{}) {
 	for i := 0; i < c.cfg.MinIdle; i++ {
 		c.spawnOne(ctx)
@@ -243,10 +255,13 @@ func (c *Client) maintainer(ctx context.Context, needConn <-chan struct{}) {
 				if overSince.IsZero() {
 					overSince = time.Now()
 				} else if time.Since(overSince) > c.cfg.IdleGrace.Duration {
-					for i := 0; i < n-c.cfg.MaxIdle; i++ {
+					excess := n - c.cfg.MaxIdle
+					batch := (excess + 1) / 2 // ceil(excess/2) — at least 1
+					for i := 0; i < batch; i++ {
 						c.shrinkOne()
 					}
-					overSince = time.Time{}
+					// overSince stays set: the next tick keeps draining
+					// immediately, without waiting out IdleGrace again.
 				}
 			default:
 				overSince = time.Time{}

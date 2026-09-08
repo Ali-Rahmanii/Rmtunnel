@@ -600,6 +600,15 @@ func askTierPreset(suggestedHost string) tierPreset {
 // an empty answer to the picker below falls back to.
 const defaultTierIndex = 1
 
+// askStaticTier deliberately does NOT resize any tier's buffers against a
+// guessed bandwidth figure — see assumedRTT's doc comment in bench.go for
+// why that turned out actively harmful on a real, throttled link. The
+// per-tier Mbit/s shown here is purely informational, computed from that
+// tier's own actual (unmodified) mux_stream_buffer, so it never promises a
+// ceiling the applied config doesn't really have. Anyone who wants buffers
+// actually matched to their real link should pick the live benchmark
+// instead (option 1 above this one) — the only path here that measures
+// rather than assumes.
 func askStaticTier() tierPreset {
 	fmt.Println()
 	for i, t := range tiers {
@@ -607,20 +616,15 @@ func askStaticTier() tierPreset {
 		if i == defaultTierIndex {
 			label += dim(" (default)")
 		}
-		ceilingMbps := float64(staticTierBDP(i).muxStreamBuffer) * 8 / 1e6 / assumedRTT.Seconds()
-		fmt.Println(menuItem(fmt.Sprint(i+1), label+" — "+t.blurb+dim(fmt.Sprintf(" (~%.0f Mbit/s per connection)", ceilingMbps))))
+		ceilingMbps := float64(t.muxStreamBuffer) * 8 / 1e6 / assumedRTT.Seconds()
+		fmt.Println(menuItem(fmt.Sprint(i+1), label+" — "+t.blurb+dim(fmt.Sprintf(" (~%.0f Mbit/s per connection at a ~%dms RTT)", ceilingMbps, assumedRTT.Milliseconds()))))
 	}
 	fmt.Println(menuItem("0", "cancel"))
 	choice := askChoice("choice", fmt.Sprint(defaultTierIndex+1))
-	idx := indexFromChoice(choice, len(tiers))
-	if idx < 0 {
-		idx = defaultTierIndex
+	if idx := indexFromChoice(choice, len(tiers)); idx >= 0 {
+		return tiers[idx]
 	}
-	tier := staticTierBDP(idx)
-	if tier.recvBuf > tiers[idx].recvBuf {
-		fmt.Println(dim(fmt.Sprintf("  (buffers raised above the tier default to clear a ~%dms link's bandwidth-delay product)", assumedRTT.Milliseconds())))
-	}
-	return tier
+	return tiers[defaultTierIndex]
 }
 
 func askLiveBenchTier(suggestedHost string) tierPreset {
