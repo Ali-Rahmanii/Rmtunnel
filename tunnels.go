@@ -100,6 +100,37 @@ func installTunnelService(role, name, configPath string) {
 
 // --- menu ---------------------------------------------------------------
 
+// menuManageRmtunnel is the main menu's "Manage rmtunnel" entry: one level
+// above the tunnel list/actions screen (menuManageTunnels, unchanged below —
+// still the "Manage tunnel" item here), alongside the live status dashboard,
+// health check, and link test as peers instead of items buried inside it.
+func menuManageRmtunnel() {
+	for {
+		sectionHeader("Manage rmtunnel")
+		fmt.Println(menuItem("1", "Manage tunnel "+dim("(edit, start/stop, logs, delete)")))
+		fmt.Println(menuItem("2", "Status tunnels "+dim("(live dashboard)")))
+		fmt.Println(menuItem("3", "Health check "+dim("(find problems and get a fix for each one)")))
+		fmt.Println(menuItem("4", "Link test "+dim("(latency/jitter/loss, transport recommendation)")))
+		fmt.Println(menuItem("0", "back"))
+
+		switch strings.ToUpper(strings.TrimSpace(readLine("choice: "))) {
+		case "1":
+			menuManageTunnels()
+		case "2":
+			menuStatusTunnels(listTunnels())
+		case "3":
+			menuHealthCheck(listTunnels())
+		case "4":
+			menuLinkTest(listTunnels())
+		case "0", "":
+			return
+		default:
+			fmt.Println(red("invalid choice."))
+			pressEnter()
+		}
+	}
+}
+
 func menuManageTunnels() {
 	for {
 		sectionHeader("Manage Tunnels")

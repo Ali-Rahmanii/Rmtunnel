@@ -492,7 +492,7 @@ func finishPaqetWizard(role, name string, c *paqetConf, iptablesPort string) {
 			} else {
 				fmt.Println(red("✖ iptables reported success but the rules aren't showing as active —"))
 				fmt.Println(red("  check whether this system uses nftables without iptables-legacy, and"))
-				fmt.Println(red("  apply them by hand if so. Retry from \"Manage tunnels\" → this tunnel →"))
+				fmt.Println(red("  apply them by hand if so. Retry from \"Manage rmtunnel\" → Manage tunnel →"))
 				fmt.Println(red("  \"Reapply iptables rules\" once fixed."))
 			}
 		}

@@ -166,7 +166,7 @@ Commented example configs, if you'd rather write one by hand:
 Main Menu
   1)  Build Iran tunnel (server)
   2)  Build Kharej tunnel (client)
-  3)  Manage tunnels
+  3)  Manage rmtunnel
   4)  Tune server (OS optimization)
   5)  Speed & hardware benchmark
   6)  Update script
@@ -180,23 +180,27 @@ plain listing — see [color.go](color.go)'s `bigBannerLines`.)
 
 Options 1/2 are wizards that ask, in order: **direction** (reverse or
 direct — see above, with the setup-order reminder printed right there),
-then — before name, token, or ports — **transport family**: TCP, or UDP.
-Picking UDP offers BackPack's three UDP-carrier variants: **raw
-datagrams** is real (Reverse direction only — see `mode = "udp"` above);
-**UDP + KCP + FEC** and **UDP + QUIC** are both real too, offered as two
-more disguise types (alongside plain/noise/wss) rather than a separate
-carrier, so they keep this project's own failover/backup-address support
-— picking either one explains that and falls through to a real TCP-variant
-pick, where enabling "kcp" or "quic" at the disguise step is what actually
-turns it on. Picking TCP asks **TCP variant** next (TCP or TCP Mux, each
-with a one-line explanation of the tradeoff — or, under Direct, a choice
-between this project's own engine and **paqet**, see above). Then: a name
-(a box can run more than one tunnel — see below), a token, which disguises
-to enable — plain, noise, wss, kcp (low-latency, tuned FEC/window preset),
-quic (self-tuning TLS 1.3 over UDP) — plus, on whichever side dials out,
-optional **backup addresses** per disguise (tried in order if the primary
-one stops working, e.g. a second IP for the same box), and (server side)
-which ports to forward — a bare port (`443`), an explicit backend
+then — before name, token, or ports — **transport family**: TCP, UDP, or
+WebSocket, BackPack's own three-way shape. Each variant underneath is a
+single, self-contained choice that configures exactly one `mode` and one
+disguise together, with no separate "which of the others too" question
+afterward — picking **UDP raw** just runs raw UDP (Reverse direction only —
+see `mode = "udp"` above); picking **UDP + KCP + FEC** or **UDP + QUIC**
+configures that disguise directly (preset/port, or domain/cert) and stops;
+picking **TCP**, **TCP Mux**, or **TCP Mux + Stealth** (noise) does the
+same for the TCP family; picking **WebSocket** configures `wss` directly.
+This project's real advantage over BackPack — several disguises configured
+together with the client automatically failing over between them (see
+`docs/CENSORSHIP.md`) — isn't lost, just moved to an explicit "add a backup
+protocol too? (advanced)" opt-in right after the primary choice, instead of
+being asked of everyone up front; `mode = "udp"` never offers it, since its
+pool socket is bound to one fixed address for the life of the process (see
+`udpcarrier.go`), so a second disguise there would protect only the initial
+dial, not the actual forwarded traffic. Then: a name (a box can run more
+than one tunnel — see below), a token, optional **backup addresses** for
+the disguise just configured (tried in order if the primary one stops
+working, e.g. a second IP for the same box), and (server side) which ports
+to forward — a bare port (`443`), an explicit backend
 (`443=127.0.0.1:2096`), or several health-checked backends for one port
 balanced round-robin over whichever are live (`443=127.0.0.1:2096|127.0.0.1:2097`),
 comma-separated for several ports at once, plus (TCP/TCP Mux only —
@@ -212,24 +216,40 @@ as a systemd service on the spot. Option **H, Help**, is a separate screen
 step by step — Reverse, Direct, paqet, managing tunnels, and tiers/
 benchmarking — see [help.go](help.go).
 
-Option 3, **Manage tunnels**, lists every tunnel configured on the box and
-lets you edit (token, ports, disguises, or performance tier — each flagged
-if the peer needs the same change), start/stop/restart, tail logs, or
-delete it. A box can run several tunnels at once (each is its own named
-systemd service instance, `rmtunnel-<role>@<name>`) — a Iran box forwarding
-several unrelated services, say, or one box running both a server tunnel
-for one purpose and a client tunnel for another. The same screen also has
-**Restart ALL** (every configured tunnel, one confirm), **Health check**
-(root/systemd/BBR/qdisc, per-tunnel token strength, buffer values that
-exceed the OS's socket-buffer ceiling, and forwarded/disguise ports that
-collide between two tunnels on the same box — each with a concrete fix, not
-just a red X), and **File locations** (where every config/unit/log actually
-is, for when you'd rather look yourself).
+Option 3, **Manage rmtunnel**, has four screens:
+
+- **Manage tunnel** — every tunnel configured on the box, with **Edit**
+  (token, ports, disguises, or performance tier — each flagged if the peer
+  needs the same change), start/stop/restart, tail logs, or delete. A box
+  can run several tunnels at once (each is its own named systemd service
+  instance, `rmtunnel-<role>@<name>`) — an Iran box forwarding several
+  unrelated services, say, or one box running both a server tunnel for one
+  purpose and a client tunnel for another. Also has **Restart ALL** (every
+  configured tunnel, one confirm) and **File locations** (where every
+  config/unit/log actually is).
+- **Status tunnels** — a live dashboard (name/role/transport/state/ports or
+  remote address for every configured tunnel), refreshing every few
+  seconds, press Enter to return.
+- **Health check** — root/systemd/BBR/qdisc, open file limit, per-tunnel
+  token strength, buffer values that exceed the OS's socket-buffer ceiling,
+  reachability (a real dial of each dialing tunnel's own disguise to its
+  peer), and forwarded/disguise ports that collide between two tunnels on
+  the same box — each with a concrete fix, not just a red X.
+- **Link test** — measures latency/jitter/packet loss to a dialing tunnel's
+  peer by timing real dials of its own configured disguise (not a synthetic
+  ping — see `linktest.go`), then recommends whether to switch `mode`
+  between `tcp`/`tcpmux` (the one transport axis this can safely flip and
+  apply itself, since both share every disguise type unchanged) or, for a
+  lossier link, a different disguise type entirely (printed, not
+  auto-applied — see "Manage tunnel" → change disguises). `mode` must match
+  on both ends with no negotiation on the wire, so any switch this screen
+  does apply always states exactly what to change on the peer, right after
+  making it.
 
 Option 4 applies the sysctl tuning from `docs/TUNING.md` (BBR, socket buffer
 ceilings). Option 6 checks this repo's GitHub Releases, replaces the running
 binary in place, migrates any tunnel still running under a pre-multi-tunnel
-install (so it shows up in "Manage tunnels" instead of running invisibly
+install (so it shows up in "Manage rmtunnel" instead of running invisibly
 under a name nothing looks for anymore), and restarts every configured
 tunnel so it's actually running the new binary — swapping the file on disk
 doesn't touch a systemd service already running the old one in memory. The
@@ -290,6 +310,17 @@ without any special setup.
   round-robin distribution across live backends, and that killing one
   backend gets it ejected after `backendFailThreshold` consecutive failed
   probes without affecting traffic to the rest
+- The wizard's restructured single-choice transport/disguise flow: every
+  variant (TCP, TCP Mux, TCP Mux + Stealth, UDP raw, UDP + KCP + FEC, UDP +
+  QUIC, WebSocket) generates the correct `mode` + exactly one disguise with
+  no extra questions, the "add a backup protocol" opt-in correctly excludes
+  the primary type already chosen, and every generated config starts up
+  clean through the real binary — checked for both server and client
+- Link Test: real dials of a live KCP tunnel and a live plain/tcpmux tunnel,
+  confirming probe timing/jitter/loss computation, the mode-switch
+  recommendation and its save+reload, and the disguise-type-change
+  recommendation's explicit "not auto-applied, do this on both ends"
+  messaging
 - UDP forwarding end-to-end, including session reuse across multiple
   datagrams from the same source
 - Concurrent load (20 simultaneous requests) on every disguise/mode

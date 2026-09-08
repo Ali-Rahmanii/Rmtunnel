@@ -107,7 +107,7 @@ func runMenu() {
 		fmt.Println(gradientRule(bannerWidth))
 		fmt.Println(menuItem("1", "Build Iran tunnel "+dim("(server)")))
 		fmt.Println(menuItem("2", "Build Kharej tunnel "+dim("(client)")))
-		fmt.Println(menuItem("3", "Manage tunnels"))
+		fmt.Println(menuItem("3", "Manage rmtunnel"))
 		fmt.Println(menuItem("4", "Tune server "+dim("(OS optimization)")))
 		fmt.Println(menuItem("5", "Speed & hardware benchmark"))
 		fmt.Println(menuItem("6", "Update script"))
@@ -123,7 +123,7 @@ func runMenu() {
 		case "2":
 			wizardClient()
 		case "3":
-			menuManageTunnels()
+			menuManageRmtunnel()
 		case "4":
 			menuTune()
 		case "5":

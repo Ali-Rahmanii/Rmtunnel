@@ -255,7 +255,19 @@ func (c *Client) spawnOne(ctx context.Context) {
 	case "tcpmux":
 		go c.muxSessionWorker(ctx, profile, epoch)
 	case "udp":
-		go c.udpCarrierSpawnOne(ctx, profile, epoch)
+		// Unlike tcp/tcpmux, the raw UDP pool socket is bound once at
+		// startup to the FIRST enabled disguise's address (see
+		// runUDPCarrier's firstDisguiseAddr) — it can't move if the control
+		// channel later fails over to a different disguise. Using
+		// c.curProfile here would silently dial the new (wrong) address for
+		// every pool worker spawned after such a failover, starving the
+		// pool with no error anywhere. profiles[0] always matches the
+		// server's assumption, regardless of which profile currently
+		// carries the control channel.
+		if len(c.profiles) == 0 {
+			return
+		}
+		go c.udpCarrierSpawnOne(ctx, c.profiles[0], epoch)
 	}
 }
 

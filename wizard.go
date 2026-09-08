@@ -92,7 +92,7 @@ func wizardServerBody() {
 		}
 	}
 
-	mode := askTransportMode(direction)
+	mode, disguises := askTransportMode(direction, listens, "Kharej box")
 	fmt.Println()
 
 	name := askTunnelName("server")
@@ -104,14 +104,6 @@ func wizardServerBody() {
 		fmt.Println(green("Token generated: ") + bold(token))
 	}
 	fmt.Println(yellow("⚠ put this exact token in the client (Kharej) config too."))
-	fmt.Println()
-
-	disguises := askDisguises(listens, "Kharej box")
-	if mode == "udp" {
-		fmt.Println(yellow("⚠ mode \"udp\" reuses the first enabled disguise above's port for its own"))
-		fmt.Println(yellow("  raw UDP pool socket — UDP and that disguise's TCP listener share the"))
-		fmt.Println(yellow("  same port number without conflict, being different protocols."))
-	}
 	fmt.Println()
 
 	ports := askPorts(mode == "udp")
@@ -157,7 +149,7 @@ func wizardClientBody() {
 		}
 	}
 
-	mode := askTransportMode(direction)
+	mode, disguises := askTransportMode(direction, listens, "Iran server")
 	fmt.Println()
 
 	name := askTunnelName("client")
@@ -168,9 +160,6 @@ func wizardClientBody() {
 		fmt.Println(red("token can't be empty."))
 		token = readLineDefault("Security token", "")
 	}
-	fmt.Println()
-
-	disguises := askDisguises(listens, "Iran server")
 	fmt.Println()
 
 	benchHost := ""
@@ -233,113 +222,140 @@ func askDirectEngine() string {
 	return "rmtunnel"
 }
 
-// askTransportMode is the "which TCP variant" question — both ends must
-// agree, since nothing on the wire negotiates it (see Config.Mode's doc
-// comment in config.go). A raw UDP or QUIC/KCP carrier isn't implemented
-// here yet; forwarding UDP traffic *through* whichever of these two is
-// chosen is a separate, already-supported yes/no in askPorts below.
-// askTransportMode asks family first (TCP or UDP), then the specific
-// variant within it — the same two-level shape BackPack itself uses. It's
-// asked before name/token/ports (see wizardServer/wizardClient) since the
-// whole rest of the wizard branches on the answer: a udp-mode tunnel skips
-// the TCP-only questions and asks about UDP forwarding differently.
-// direction decides whether "UDP — raw datagrams" is offered as a real,
-// runnable choice (Reverse only — see udpcarrier.go) or stays a preview
-// like the other two UDP variants.
-func askTransportMode(direction string) string {
-	fmt.Println(bold(magenta("Transport family")))
-	fmt.Println(dim("Both ends must use the same one — there's no negotiation on the wire."))
-	fmt.Println()
-	fmt.Println(menuItem("1", bold("TCP")+dim(" (default)")+" — reliable, works everywhere"))
-	fmt.Println(menuItem("2", "UDP — raw datagrams, or a preview of KCP+FEC/QUIC"))
-	fmt.Println(menuItem("0", "cancel"))
-	if askChoice("choice", "1") == "2" {
-		if mode := askUDPFamily(direction); mode != "" {
-			return mode
+// askTransportMode is the wizard's top-level protocol picker: BackPack's own
+// three-way family shape (TCP / UDP / WebSocket), each a single,
+// self-contained choice that configures exactly one Config.Mode and exactly
+// one disguise, inline, with no separate "which of the other protocols too"
+// question afterward — picking "UDP raw" just runs raw UDP, picking "UDP +
+// KCP" just runs KCP, and neither one asks about the other or about
+// plain/noise/wss. This matches BackPack's own wizard, and replaces the
+// older shape where transport family and the disguise multi-select were two
+// separate, decoupled questions.
+//
+// This project's actual advantage over BackPack — several disguises
+// configured together with the client automatically failing over between
+// them (see docs/CENSORSHIP.md) — isn't lost, just moved to an explicit
+// opt-in afterward (see askBackupProtocols) instead of being asked of
+// everyone up front. mode "udp" never offers it: its pool socket is bound
+// once, for the life of the process, to its one disguise's address (see
+// udpcarrier.go's firstDisguiseAddr/client.go's spawnOne) — a second
+// disguise there would protect only the initial control-channel dial, not
+// the actual forwarded traffic, which would be a false promise of
+// redundancy.
+func askTransportMode(direction string, listens bool, peerLabel string) (mode string, disguises []disguiseAnswer) {
+	var d disguiseAnswer
+	for {
+		fmt.Println(bold(magenta("Transport family")))
+		fmt.Println(dim("Both ends must use the same one — there's no negotiation on the wire."))
+		fmt.Println()
+		fmt.Println(menuItem("1", bold("TCP")+dim(" (default)")+" — reliable, works everywhere"))
+		fmt.Println(menuItem("2", "UDP — raw datagrams, KCP+FEC, or QUIC"))
+		fmt.Println(menuItem("3", "WebSocket"+dim(" (wss)")+" — looks like an ordinary HTTPS site, strongest disguise"))
+		fmt.Println(menuItem("0", "cancel"))
+
+		var ok bool
+		switch askChoice("choice", "1") {
+		case "2":
+			mode, d, ok = askUDPVariant(direction, listens, peerLabel)
+			if !ok {
+				continue // raw UDP picked under a direction it can't run in — re-ask
+			}
+		case "3":
+			fmt.Println()
+			fmt.Println(bold(magenta("WebSocket (wss)")))
+			d = askWSSDisguiseAnswer(listens, peerLabel)
+			mode = "tcpmux"
+		default:
+			mode, d = askTCPVariant(listens, peerLabel)
+		}
+		break
+	}
+	disguises = []disguiseAnswer{d}
+
+	if mode != "udp" {
+		fmt.Println()
+		if confirm("Add a backup protocol too, for automatic failover if this one gets blocked? "+dim("(advanced)"), false) {
+			disguises = append(disguises, askDisguises(listens, peerLabel, d.Type)...)
 		}
 	}
-	return askTCPVariant()
+	return mode, disguises
 }
 
-// askTCPVariant is the "which TCP variant" question — both ends must
-// agree, since nothing on the wire negotiates it (see Config.Mode's doc
-// comment in config.go). Forwarding UDP traffic *through* whichever of
-// these two is chosen is a separate, already-supported yes/no in askPorts
-// below — not the same thing as a UDP carrier (see askUDPFamily).
-func askTCPVariant() string {
+// askTCPVariant offers this project's TCP-family variants as single,
+// self-contained choices, each pairing one Config.Mode with one disguise —
+// mirroring BackPack's own TCP submenu (TCP / TCP Mux / TCP + Stealth).
+// BackPack's fourth option, raw packets below the kernel bypassing
+// connection tracking, is what paqet already provides in this project (see
+// askDirectEngine) — but only under Direction "direct", since paqet's own
+// protocol needs the ports-owning side to dial first, so it isn't repeated
+// here as a TCP-family choice.
+func askTCPVariant(listens bool, peerLabel string) (mode string, d disguiseAnswer) {
 	fmt.Println()
 	fmt.Println(bold(magenta("TCP variant")))
 	fmt.Println(menuItem("1", "TCP — one connection per session, simplest, lowest overhead"))
 	fmt.Println(menuItem("2", bold("TCP Mux")+dim(" (default)")+" — many sessions multiplexed over a few connections, better under concurrent load"))
+	fmt.Println(menuItem("3", "TCP Mux + Stealth"+dim(" (noise)")+" — encrypted, no fixed protocol signature, hardest to fingerprint"))
 	fmt.Println(menuItem("0", "cancel"))
-	if askChoice("choice", "2") == "1" {
-		return "tcp"
+
+	switch askChoice("choice", "2") {
+	case "1":
+		fmt.Println()
+		return "tcp", askPlainDisguiseAnswer(listens, peerLabel)
+	case "3":
+		fmt.Println()
+		fmt.Println(bold(magenta("TCP Mux + Stealth")))
+		return "tcpmux", askNoiseDisguiseAnswer(listens, peerLabel)
+	default:
+		fmt.Println()
+		return "tcpmux", askPlainDisguiseAnswer(listens, peerLabel)
 	}
-	return "tcpmux"
 }
 
-// askUDPFamily offers BackPack's three UDP carrier variants. Only "raw
-// datagrams" (mode "udp" — see udpcarrier.go) is actually implemented, and
-// only under Direction "reverse": its pool socket is inherently
-// server-listens/client-dials shaped, the same way paqet's own protocol is
-// inherently direct-shaped. The other two stay descriptions, not runnable
-// code — each is its own large, separate undertaking (see README.md and
-// docs/TUNING.md), and paqet already covers "raw-packet, low-latency" for
-// real use today via the Direct-mode engine choice. Returns "udp" if the
-// real option was picked, "" if the caller should fall back to a TCP
-// variant instead.
-func askUDPFamily(direction string) string {
+// askUDPVariant offers the three real UDP variants as single, self-contained
+// choices — see askTransportMode. ok is false only when raw UDP is picked
+// under a direction that can't run it (Reverse only — its pool socket is
+// inherently server-listens/client-dials shaped), in which case the caller
+// re-asks; "0" (cancel) unwinds the whole wizard on its own via askChoice,
+// same as every other menu here, so it needs no handling of its own.
+func askUDPVariant(direction string, listens bool, peerLabel string) (mode string, d disguiseAnswer, ok bool) {
 	fmt.Println()
 	fmt.Println(bold(magenta("UDP variant")))
 	rawLabel := bold("UDP") + " — raw datagrams, for UDP-based services"
 	if direction != "reverse" {
-		rawLabel = "UDP — raw datagrams" + dim(" (preview — Reverse direction only, for now)")
+		rawLabel = "UDP — raw datagrams" + dim(" (Reverse direction only, for now)")
 	}
 	fmt.Println(menuItem("1", rawLabel))
 	fmt.Println(menuItem("2", bold("UDP + KCP + FEC")+" — low-latency gaming tunnel, reliable UDP with always-on error correction"))
-	fmt.Println(menuItem("3", "UDP + QUIC"+" — encrypted TLS 1.3 streams over UDP, self-tuning, great under loss"))
+	fmt.Println(menuItem("3", "UDP + QUIC — encrypted TLS 1.3 streams over UDP, self-tuning, great under loss"))
 	fmt.Println(menuItem("0", "back"))
-	choice := askChoice("choice", "1")
 
-	if choice == "1" && direction == "reverse" {
+	switch askChoice("choice", "1") {
+	case "2":
+		fmt.Println()
+		fmt.Println(bold(magenta("UDP + KCP + FEC")))
+		return "tcpmux", askKCPDisguiseAnswer(listens, peerLabel), true
+
+	case "3":
+		fmt.Println()
+		fmt.Println(bold(magenta("UDP + QUIC")))
+		return "tcpmux", askQUICDisguiseAnswer(listens, peerLabel), true
+
+	default: // "1"
+		if direction != "reverse" {
+			fmt.Println()
+			fmt.Println(yellow("⚠ raw UDP is Reverse-direction only for now — switch direction to use it."))
+			pressEnter()
+			return "", disguiseAnswer{}, false
+		}
 		fmt.Println()
 		fmt.Println(dim("Raw UDP: no framing, no retransmission, no encryption of its own — one"))
 		fmt.Println(dim("packet in becomes one packet out, end to end. Best for a UDP protocol"))
 		fmt.Println(dim("that already tolerates loss (WireGuard, a game) and wants the least"))
-		fmt.Println(dim("overhead the tunnel can add. The control channel stays fully protected"))
-		fmt.Println(dim("by whichever disguise you pick next."))
-		return "udp"
+		fmt.Println(dim("overhead the tunnel can add. The control channel itself is plain TCP,"))
+		fmt.Println(dim("on the same port number the UDP pool socket reuses below — different"))
+		fmt.Println(dim("protocols, so the two don't conflict."))
+		return "udp", askPlainDisguiseAnswer(listens, peerLabel), true
 	}
-
-	if choice == "2" {
-		fmt.Println()
-		fmt.Println(dim("KCP+FEC isn't a separate transport family here — it's one more disguise"))
-		fmt.Println(dim("type, alongside plain/noise/wss, so it keeps this project's own failover"))
-		fmt.Println(dim("and backup-address support instead of losing them for something exotic."))
-		fmt.Println(dim("Enable \"kcp\" at the next question. TCP Mux (recommended below) is the"))
-		fmt.Println(dim("natural pairing — many streams multiplexed over a few KCP sessions,"))
-		fmt.Println(dim("exactly how paqet and BackPack both build the same idea."))
-		pressEnter()
-		return "" // falls through to askTCPVariant, tcpmux recommended
-	}
-
-	if choice == "3" {
-		fmt.Println()
-		fmt.Println(dim("QUIC isn't a separate transport family here either — it's one more"))
-		fmt.Println(dim("disguise type, alongside plain/noise/wss/kcp, so it keeps this"))
-		fmt.Println(dim("project's own failover and backup-address support. It self-tunes its"))
-		fmt.Println(dim("own congestion control, so there's no preset/tuning question like kcp's"))
-		fmt.Println(dim("— just the same TLS cert/domain question wss already asks. Enable"))
-		fmt.Println(dim("\"quic\" at the next question. TCP Mux (recommended below) is the"))
-		fmt.Println(dim("natural pairing, same as with kcp."))
-		pressEnter()
-		return "" // falls through to askTCPVariant, tcpmux recommended
-	}
-
-	fmt.Println()
-	fmt.Println(yellow("⚠ raw UDP is Reverse-direction only for now — switch direction to use it."))
-	pressEnter()
-	return ""
 }
 
 // askTunnelName asks for a short identifier used to name this tunnel's
@@ -360,107 +376,143 @@ func askTunnelName(role string) string {
 	}
 }
 
-// askDisguises walks through the three disguise types, asking which are
-// enabled and, for wss, its extra fields. listens decides whether it asks
-// for a listen_addr (this box) or a server_addr (peerLabel, the box being
-// dialed) — which no longer tracks Role directly once Direction "direct" is
-// in play, see wizardServer/wizardClient.
-func askDisguises(listens bool, peerLabel string) []disguiseAnswer {
+// askWSSDisguiseAnswer, askNoiseDisguiseAnswer, askPlainDisguiseAnswer,
+// askKCPDisguiseAnswer, and askQUICDisguiseAnswer each collect one disguise
+// type's own fields, with no "enable this? y/n" wrapper of their own — that
+// wrapper belongs to whichever caller is choosing to include this type,
+// either askDisguises' multi-select below or one of askTransportMode's
+// single-choice pickers, which call these directly. listens decides whether
+// each asks for a listen_addr (this box) or a server_addr (peerLabel, the
+// box being dialed) — which no longer tracks Role directly once Direction
+// "direct" is in play, see wizardServer/wizardClient.
+
+func askWSSDisguiseAnswer(listens bool, peerLabel string) disguiseAnswer {
+	d := disguiseAnswer{Type: "wss", Path: "/ws"}
+	if listens {
+		port := readLineDefault("    wss listen port", "443")
+		d.Addr = "0.0.0.0:" + port
+		d.Domain = readLineDefault("    domain (enter it if you have a real cert, else leave blank)", "")
+		d.CertFile = readLineDefault("    cert file path (blank = self-signed)", "")
+		if d.CertFile != "" {
+			d.KeyFile = readLineDefault("    key file path", "")
+		}
+	} else {
+		ip := readLine("    " + peerLabel + "'s public address: ")
+		port := readLineDefault("    its wss port", "443")
+		d.Addr = ip + ":" + port
+		d.Domain = readLineDefault("    domain (exactly what you set on the listening side, or blank)", "")
+		d.Insecure = confirm("    does the listening side use a self-signed cert?", true)
+		d.BackupAddrs = askBackupAddrs()
+	}
+	return d
+}
+
+func askNoiseDisguiseAnswer(listens bool, peerLabel string) disguiseAnswer {
+	d := disguiseAnswer{Type: "noise"}
+	if listens {
+		port := readLineDefault("    noise listen port", "9001")
+		d.Addr = "0.0.0.0:" + port
+	} else {
+		ip := readLine("    " + peerLabel + "'s public address: ")
+		port := readLineDefault("    its noise port", "9001")
+		d.Addr = ip + ":" + port
+		d.BackupAddrs = askBackupAddrs()
+	}
+	return d
+}
+
+func askPlainDisguiseAnswer(listens bool, peerLabel string) disguiseAnswer {
+	d := disguiseAnswer{Type: "plain"}
+	if listens {
+		port := readLineDefault("    plain listen port", "9000")
+		d.Addr = "0.0.0.0:" + port
+	} else {
+		ip := readLine("    " + peerLabel + "'s public address: ")
+		port := readLineDefault("    its plain port", "9000")
+		d.Addr = ip + ":" + port
+		d.BackupAddrs = askBackupAddrs()
+	}
+	return d
+}
+
+func askKCPDisguiseAnswer(listens bool, peerLabel string) disguiseAnswer {
+	d := disguiseAnswer{Type: "kcp"}
+	if listens {
+		port := readLineDefault("    kcp listen port", "9002")
+		d.Addr = "0.0.0.0:" + port
+	} else {
+		ip := readLine("    " + peerLabel + "'s public address: ")
+		port := readLineDefault("    its kcp port", "9002")
+		d.Addr = ip + ":" + port
+		d.BackupAddrs = askBackupAddrs()
+	}
+	askKCPSettings(&d)
+	return d
+}
+
+func askQUICDisguiseAnswer(listens bool, peerLabel string) disguiseAnswer {
+	d := disguiseAnswer{Type: "quic"}
+	if listens {
+		port := readLineDefault("    quic listen port", "9003")
+		d.Addr = "0.0.0.0:" + port
+		d.Domain = readLineDefault("    domain (enter it if you have a real cert, else leave blank)", "")
+		d.CertFile = readLineDefault("    cert file path (blank = self-signed)", "")
+		if d.CertFile != "" {
+			d.KeyFile = readLineDefault("    key file path", "")
+		}
+	} else {
+		ip := readLine("    " + peerLabel + "'s public address: ")
+		port := readLineDefault("    its quic port", "9003")
+		d.Addr = ip + ":" + port
+		d.Domain = readLineDefault("    domain (exactly what you set on the listening side, or blank)", "")
+		d.Insecure = confirm("    does the listening side use a self-signed cert?", true)
+		d.BackupAddrs = askBackupAddrs()
+	}
+	return d
+}
+
+// askDisguises walks through every disguise type not already in exclude,
+// asking which additional ones to enable — used two ways: standalone, from
+// "Manage tunnels → change disguises" (exclude empty, unchanged behavior),
+// and as askTransportMode's "add a backup protocol" opt-in, where exclude is
+// whichever type was just configured as the primary choice, so it isn't
+// offered a second time.
+func askDisguises(listens bool, peerLabel string, exclude ...string) []disguiseAnswer {
+	skip := make(map[string]bool, len(exclude))
+	for _, t := range exclude {
+		skip[t] = true
+	}
+
 	fmt.Println(bold(magenta("Which anti-filtering methods should be enabled?")))
-	fmt.Println(dim("Recommended: enable all three — the dialing side switches between them on its own."))
+	fmt.Println(dim("Recommended: enable more than one — the dialing side switches between them on its own."))
 	fmt.Println(dim("Full explanation of each: docs/CENSORSHIP.md"))
 	fmt.Println()
 
 	var out []disguiseAnswer
 
-	if confirm("  wss (TLS+WebSocket, looks like an ordinary HTTPS site — strongest)", true) {
-		d := disguiseAnswer{Type: "wss", Path: "/ws"}
-		if listens {
-			port := readLineDefault("    wss listen port", "443")
-			d.Addr = "0.0.0.0:" + port
-			d.Domain = readLineDefault("    domain (enter it if you have a real cert, else leave blank)", "")
-			d.CertFile = readLineDefault("    cert file path (blank = self-signed)", "")
-			if d.CertFile != "" {
-				d.KeyFile = readLineDefault("    key file path", "")
-			}
-		} else {
-			ip := readLine("    " + peerLabel + "'s public address: ")
-			port := readLineDefault("    its wss port", "443")
-			d.Addr = ip + ":" + port
-			d.Domain = readLineDefault("    domain (exactly what you set on the listening side, or blank)", "")
-			d.Insecure = confirm("    does the listening side use a self-signed cert?", true)
-			d.BackupAddrs = askBackupAddrs()
-		}
-		out = append(out, d)
+	if !skip["wss"] && confirm("  wss (TLS+WebSocket, looks like an ordinary HTTPS site — strongest)", len(skip) == 0) {
+		out = append(out, askWSSDisguiseAnswer(listens, peerLabel))
 	}
 
-	if confirm("  noise (encrypted, no fixed protocol signature)", true) {
-		d := disguiseAnswer{Type: "noise"}
-		if listens {
-			port := readLineDefault("    noise listen port", "9001")
-			d.Addr = "0.0.0.0:" + port
-		} else {
-			ip := readLine("    " + peerLabel + "'s public address: ")
-			port := readLineDefault("    its noise port", "9001")
-			d.Addr = ip + ":" + port
-			d.BackupAddrs = askBackupAddrs()
-		}
-		out = append(out, d)
+	if !skip["noise"] && confirm("  noise (encrypted, no fixed protocol signature)", len(skip) == 0) {
+		out = append(out, askNoiseDisguiseAnswer(listens, peerLabel))
 	}
 
-	if confirm("  plain (raw, fastest but easiest to fingerprint)", true) {
-		d := disguiseAnswer{Type: "plain"}
-		if listens {
-			port := readLineDefault("    plain listen port", "9000")
-			d.Addr = "0.0.0.0:" + port
-		} else {
-			ip := readLine("    " + peerLabel + "'s public address: ")
-			port := readLineDefault("    its plain port", "9000")
-			d.Addr = ip + ":" + port
-			d.BackupAddrs = askBackupAddrs()
-		}
-		out = append(out, d)
+	if !skip["plain"] && confirm("  plain (raw, fastest but easiest to fingerprint)", len(skip) == 0) {
+		out = append(out, askPlainDisguiseAnswer(listens, peerLabel))
 	}
 
-	if confirm("  kcp"+dim(" (low-latency \"gaming\" carrier — reliable UDP, tuned for steady ping)"), false) {
-		d := disguiseAnswer{Type: "kcp"}
-		if listens {
-			port := readLineDefault("    kcp listen port", "9002")
-			d.Addr = "0.0.0.0:" + port
-		} else {
-			ip := readLine("    " + peerLabel + "'s public address: ")
-			port := readLineDefault("    its kcp port", "9002")
-			d.Addr = ip + ":" + port
-			d.BackupAddrs = askBackupAddrs()
-		}
-		askKCPSettings(&d)
-		out = append(out, d)
+	if !skip["kcp"] && confirm("  kcp"+dim(" (low-latency \"gaming\" carrier — reliable UDP, tuned for steady ping)"), false) {
+		out = append(out, askKCPDisguiseAnswer(listens, peerLabel))
 	}
 
-	if confirm("  quic"+dim(" (TLS 1.3 over UDP, self-tuning — great under loss, looks like HTTP/3)"), false) {
-		d := disguiseAnswer{Type: "quic"}
-		if listens {
-			port := readLineDefault("    quic listen port", "9003")
-			d.Addr = "0.0.0.0:" + port
-			d.Domain = readLineDefault("    domain (enter it if you have a real cert, else leave blank)", "")
-			d.CertFile = readLineDefault("    cert file path (blank = self-signed)", "")
-			if d.CertFile != "" {
-				d.KeyFile = readLineDefault("    key file path", "")
-			}
-		} else {
-			ip := readLine("    " + peerLabel + "'s public address: ")
-			port := readLineDefault("    its quic port", "9003")
-			d.Addr = ip + ":" + port
-			d.Domain = readLineDefault("    domain (exactly what you set on the listening side, or blank)", "")
-			d.Insecure = confirm("    does the listening side use a self-signed cert?", true)
-			d.BackupAddrs = askBackupAddrs()
-		}
-		out = append(out, d)
+	if !skip["quic"] && confirm("  quic"+dim(" (TLS 1.3 over UDP, self-tuning — great under loss, looks like HTTP/3)"), false) {
+		out = append(out, askQUICDisguiseAnswer(listens, peerLabel))
 	}
 
 	for len(out) == 0 {
 		fmt.Println(red("you need to enable at least one."))
-		out = askDisguises(listens, peerLabel)
+		out = askDisguises(listens, peerLabel, exclude...)
 	}
 	return out
 }

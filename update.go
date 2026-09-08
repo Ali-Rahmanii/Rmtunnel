@@ -156,7 +156,7 @@ func menuUpdate() {
 		fmt.Println(dim(fmt.Sprintf("restarting %d tunnel(s) so they run %s...", len(tunnels), rel.TagName)))
 		for _, t := range tunnels {
 			if _, err := run("systemctl", "restart", t.unit()); err != nil {
-				fmt.Println(red("  failed to restart " + t.unit() + " — restart it by hand from \"Manage tunnels\"."))
+				fmt.Println(red("  failed to restart " + t.unit() + " — restart it by hand from \"Manage rmtunnel\"."))
 			} else {
 				fmt.Println(green("  restarted " + t.unit()))
 			}
@@ -242,7 +242,7 @@ func migrateLegacyTunnels() []string {
 		os.Remove(lt.unitFile)
 
 		if _, err := LoadConfig(newPath, lt.role); err != nil {
-			fmt.Println(yellow("⚠ migrated " + lt.configPath + " but it no longer validates (" + err.Error() + ") — fix it from \"Manage tunnels\" → Edit before starting it."))
+			fmt.Println(yellow("⚠ migrated " + lt.configPath + " but it no longer validates (" + err.Error() + ") — fix it from \"Manage rmtunnel\" → Manage tunnel → Edit before starting it."))
 			migrated = append(migrated, lt.role+"/"+name)
 			continue
 		}

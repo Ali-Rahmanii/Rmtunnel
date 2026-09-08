@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // menuHealthCheck runs a battery of system- and per-tunnel checks and prints
@@ -26,6 +28,11 @@ func menuHealthCheck(tunnels []tunnelRef) {
 	checkFact(fmt.Sprintf("congestion control = bbr (currently %q)", cc), cc == "bbr", "run \"Tune server\" from the main menu")
 	qd := strings.TrimSpace(sysctlGet("net.core.default_qdisc"))
 	checkFact(fmt.Sprintf("qdisc = fq (currently %q)", qd), qd == "fq", "run \"Tune server\" from the main menu")
+
+	if limit, ok := openFileLimit(); ok {
+		checkFact(fmt.Sprintf("open file limit >= 65536 (currently %d)", limit), limit >= 65536,
+			"raise LimitNOFILE for the rmtunnel-*.service units, or ulimit -n system-wide — a busy tcpmux tunnel can run out under load")
+	}
 
 	rmemMax := sysctlInt("net.core.rmem_max")
 	wmemMax := sysctlInt("net.core.wmem_max")
@@ -61,8 +68,20 @@ func menuHealthCheck(tunnels []tunnelRef) {
 		}
 
 		active, _ := serviceStatus(t.unit())
-		checkFact("service active", active, "start it from \"Manage tunnels\"")
+		checkFact("service active", active, "start it from \"Manage rmtunnel\" → Manage tunnel")
 		checkFact("token looks strong (>= 16 chars)", len(cfg.Token) >= 16, "regenerate it via Edit — a short token is easier to brute-force")
+
+		if cfg.dialsOut() && len(cfg.Disguise) > 0 {
+			d := &cfg.Disguise[0]
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			conn, dialErr := dialDisguise(ctx, cfg, d)
+			cancel()
+			if dialErr == nil {
+				conn.Close()
+			}
+			checkFact("reachable: "+d.Type+" connect to "+d.ServerAddr, dialErr == nil,
+				"check the peer is up, the address/port match, and the firewall allows it — or add a backup address via Edit")
+		}
 
 		if rmemMax > 0 && cfg.RecvBuf > rmemMax {
 			fmt.Printf("    %s recv_buf (%d) exceeds net.core.rmem_max (%d) — the OS silently caps it there\n", yellow("⚠"), cfg.RecvBuf, rmemMax)
@@ -115,4 +134,23 @@ func sysctlInt(key string) int {
 
 func isRoot() bool {
 	return os.Geteuid() == 0
+}
+
+// openFileLimit reads this process's own soft open-file limit via the shell
+// builtin (there's no standalone "ulimit" binary to exec) — best-effort like
+// every other sysctl-based check in this file: ok is false on a box with no
+// POSIX shell (Windows), where the check is simply skipped rather than
+// reported as a failure. A tcpmux tunnel opens one real socket per session
+// plus one per relayed stream, so a low limit is a real, if uncommon, way
+// for a busy tunnel to start refusing new connections under load.
+func openFileLimit() (limit int, ok bool) {
+	out, err := run("sh", "-c", "ulimit -n")
+	if err != nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
