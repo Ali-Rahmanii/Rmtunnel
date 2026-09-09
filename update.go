@@ -151,6 +151,11 @@ func menuUpdate() {
 		fmt.Println(green("migrated legacy tunnel \"" + name + "\" to the multi-tunnel layout."))
 	}
 
+	retuned := migrateStaleTuning()
+	for _, name := range retuned {
+		fmt.Println(green("reset " + name + "'s buffer tuning — it had the v0.12.0-v0.12.1 bufferbloat bug's exact fingerprint."))
+	}
+
 	tunnels := listTunnels()
 	if len(tunnels) > 0 {
 		fmt.Println(dim(fmt.Sprintf("restarting %d tunnel(s) so they run %s...", len(tunnels), rel.TagName)))
@@ -251,6 +256,78 @@ func migrateLegacyTunnels() []string {
 		migrated = append(migrated, lt.role+"/"+name)
 	}
 	return migrated
+}
+
+// staleTuningFingerprint is the exact recv_buf/send_buf/mux_stream_buffer
+// value the v0.12.0-v0.12.1 tier-flooring bug would have written for each
+// tier — see bench.go's assumedRTT doc comment for the full story. All
+// three fields end up numerically equal for every tier under that bug (all
+// derive from the same guessed bandwidth-delay product), which makes an
+// oddly specific, three-way-matching number like exactly 5000000 a safe
+// fingerprint: a real hand-tuned config landing on the exact same number by
+// coincidence, on all three fields at once, is not a realistic risk.
+type staleTuningFingerprint struct {
+	tierIndex int
+	value     int
+}
+
+var staleTuningFingerprints = func() []staleTuningFingerprint {
+	badCeilingMbps := []float64{20, 100, 500, 800, 2000}
+	out := make([]staleTuningFingerprint, len(tiers))
+	for i := range tiers {
+		out[i] = staleTuningFingerprint{tierIndex: i, value: bdpBytes(badCeilingMbps[i], 80*time.Millisecond)}
+	}
+	return out
+}()
+
+// migrateStaleTuning finds every tunnel whose recv_buf/send_buf/
+// mux_stream_buffer exactly match one tier's known-bad fingerprint from the
+// bufferbloat bug and resets just those fields (plus mux_recv_buffer, only
+// if IT also still shows that bug's exact derived value) back to that
+// tier's real, unmodified defaults — the same reset "change performance
+// tier" already does by hand, just found and applied automatically so a
+// config written while the bug was live doesn't keep the bad numbers
+// forever just because updating the binary alone can't touch a file
+// already sitting on disk. Never touches anything that doesn't match the
+// fingerprint exactly, so a genuinely hand-tuned config is never at risk.
+func migrateStaleTuning() []string {
+	var fixed []string
+	for _, t := range listTunnels() {
+		if t.isPaqet() {
+			continue // paqet's config shape is unrelated to this project's own tier tuning
+		}
+		cfg, err := LoadConfig(t.Path, t.Role)
+		if err != nil {
+			continue
+		}
+
+		var match *staleTuningFingerprint
+		for i := range staleTuningFingerprints {
+			fp := staleTuningFingerprints[i]
+			if cfg.RecvBuf == fp.value && cfg.SendBuf == fp.value && cfg.MuxStreamBuffer == fp.value {
+				match = &fp
+				break
+			}
+		}
+		if match == nil {
+			continue
+		}
+
+		honest := tiers[match.tierIndex]
+		cfg.RecvBuf = honest.recvBuf
+		cfg.SendBuf = honest.sendBuf
+		cfg.MuxStreamBuffer = honest.muxStreamBuffer
+		if cfg.MuxRecvBuffer == match.value*4 {
+			cfg.MuxRecvBuffer = honest.muxRecvBuffer
+		}
+
+		if err := saveConfig(cfg, t.Path); err != nil {
+			fmt.Println(red("failed to fix tuning for " + t.Role + "/" + t.Name + ": " + err.Error()))
+			continue
+		}
+		fixed = append(fixed, t.Role+"/"+t.Name)
+	}
+	return fixed
 }
 
 func isNewerVersion(tag string) bool {

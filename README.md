@@ -368,6 +368,23 @@ without any special setup.
   the given address — set it only to capture a real heap/goroutine profile
   from a box whose memory/CPU doesn't match what its config would predict,
   then unset it again; see `debug.go`.
+- Fixed "Delete" leaving a tunnel's systemd `.service` file behind — it
+  disabled and stopped the unit and removed the config, but never removed
+  the unit file itself or reloaded the systemd daemon, so a "deleted"
+  tunnel kept showing up forever in `systemctl status rmtunnel-<TAB>` and
+  every other unit listing. Delete now removes the unit file, its metrics
+  snapshot, runs `daemon-reload`, and clears any failed-state record too.
+- Update script now also fixes any tunnel whose config still carries the
+  bufferbloat bug's exact numeric fingerprint (recv_buf/send_buf/
+  mux_stream_buffer all matching one tier's known-bad, now-reverted value)
+  — a config written while that bug was live keeps the bad numbers forever
+  otherwise, since replacing the binary alone can't touch a file already on
+  disk. This is the same targeted, fingerprint-matched approach as the
+  existing legacy-layout migration (`migrateLegacyTunnels`) — see
+  `migrateStaleTuning` in `update.go` — deliberately narrow so a genuinely
+  hand-tuned config, which would need to coincidentally match all three
+  fields to an oddly specific number at once, is never at risk of being
+  silently overwritten.
 
 ## What's tested
 

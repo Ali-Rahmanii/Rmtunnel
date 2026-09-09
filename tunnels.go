@@ -499,12 +499,25 @@ func saveConfig(cfg *Config, path string) error {
 	return os.WriteFile(path, buf.Bytes(), 0o600)
 }
 
+// deleteTunnel removes everything installTunnelService/installPaqetService
+// (service.go) created for this tunnel — not just its config. Leaving the
+// unit file behind used to mean a "deleted" tunnel kept showing up in
+// `systemctl status rmtunnel-<TAB>` and every other unit listing forever,
+// since systemd still had a definition for it on disk even fully stopped
+// and disabled; only removing the .service file and reloading the daemon
+// actually makes systemd forget it existed.
 func deleteTunnel(t tunnelRef) bool {
 	if !confirm(red("delete tunnel \""+t.Name+"\" ("+t.Role+")? this stops it and removes its config"), false) {
 		return false
 	}
 	run("systemctl", "disable", "--now", t.unit())
+	os.Remove("/etc/systemd/system/" + t.unit() + ".service")
+	run("systemctl", "daemon-reload")
+	run("systemctl", "reset-failed", t.unit())
 	os.Remove(t.Path)
+	if !t.isPaqet() {
+		os.Remove(metricsPath(t.Path))
+	}
 	fmt.Println(green("deleted."))
 	pressEnter()
 	return true
